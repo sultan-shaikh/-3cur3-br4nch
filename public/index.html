@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Cisco Secure Branch Architect</title>
+<link rel="stylesheet" href="assets/styles.css">
+<script src="assets/vendor/purify.min.js" defer></script>
+<script src="assets/vendor/marked.min.js" defer></script>
+<script src="assets/vendor/mermaid.min.js" defer></script>
+<script src="assets/js/core.js" defer></script>
+<script src="assets/js/app.js" defer></script>
+</head>
+<body>
+<div id="lock" class="modal" hidden>
+  <form id="lockForm" class="card">
+    <h2>Access required</h2>
+    <p class="muted">Enter your access code to use the tool.</p>
+    <input id="lockInput" type="password" autocomplete="current-password" placeholder="Access code" required>
+    <p id="lockErr" class="err" hidden></p>
+    <button class="btn primary" type="submit">Unlock</button>
+  </form>
+</div>
+
+<header class="top">
+  <div><h1>Cisco Secure Branch Architect</h1><span class="muted">Meraki LAN · WAN · Security · WiFi · Camera · IoT + Secure Access</span></div>
+  <div class="row"><select id="model" title="Gemini model"></select><button id="lockBtn" class="btn" type="button">Lock</button></div>
+</header>
+
+<main>
+<section class="card" id="s1">
+  <h2>1 · Price book</h2>
+  <p class="muted">CSV columns: SKU, Description, HardwarePrice, Price_1Y, Price_3Y, Price_5Y. Only SKUs in this file are ever priced.</p>
+  <input id="pbFile" type="file" accept=".csv,text/csv">
+  <p id="pbStatus" class="muted">No price book loaded.</p>
+</section>
+
+<section class="card" id="s2">
+  <h2>2 · Customer &amp; scope</h2>
+  <div class="grid">
+    <label>Customer<input id="customer" value="Customer"></label>
+    <label>Remote / Secure Access users<input id="saUsers" type="number" min="0" value="0"></label>
+    <label>Currency<select id="cur"><option>USD</option><option>GBP</option><option>EUR</option></select></label>
+    <label>FX rate (from USD)<input id="fx" type="number" step="0.0001" value="1"></label>
+    <label>Managed service tier<select id="svc"><option value="none">None</option><option value="foundation">Foundation (2%)</option><option value="enhanced">Enhanced (5%)</option><option value="premium">Premium (8%)</option></select></label>
+    <label>WAN circuits (annual, all sites)<input id="wanAnnual" type="number" min="0" value="0"></label>
+  </div>
+  <div class="checks">
+    <label><input type="checkbox" id="incSA" checked> Cisco Secure Access / Secure Connect</label>
+    <label><input type="checkbox" id="derive"> Derive missing 3Y/5Y prices (30% / 50% discount) — estimate</label>
+  </div>
+</section>
+
+<section class="card" id="s3">
+  <h2>3 · Sites</h2>
+  <div class="row wrap">
+    <label class="btn">Scan diagram <input id="scanFile" type="file" accept="image/*" hidden></label>
+    <button id="addSite" class="btn" type="button">+ Add site</button>
+  </div>
+  <p id="scanNote" class="warn" hidden></p>
+  <div class="tablewrap"><table id="sites">
+    <thead><tr><th>Name</th><th>Type</th><th>Users</th><th>WAN Mbps</th><th>Wired ports</th><th>Cameras</th><th>Sensors</th><th>HA</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table></div>
+  <p class="muted">APs and switches are sized automatically (30 users/AP, 24 ports/switch). Leave blank values as 0.</p>
+</section>
+
+<section class="card">
+  <button id="go" class="btn primary big" type="button">Generate design &amp; BoM</button>
+  <span id="status" class="muted"></span>
+  <p id="error" class="err" hidden></p>
+</section>
+
+<section id="report" hidden></section>
+</main>
+</body>
+</html>
