@@ -6,15 +6,23 @@
 const CONFIG = {
   usersPerAp: 30,
   portsPerSwitch: 24,
-  serviceTiers: { none: 0, foundation: 0.02, enhanced: 0.05, premium: 0.08 },
-  mxRules: [ // max WAN Mbps (aggregate of site bandwidth) -> MX model; first match wins
-    { upTo: 200, model: 'MX67' }, { upTo: 500, model: 'MX85' }, { upTo: 1000, model: 'MX95' },
-    { upTo: 2000, model: 'MX105' }, { upTo: 5000, model: 'MX250' }, { upTo: 1e9, model: 'MX450' },
+  wiredShare: 0.5,            // share of users needing a wired port
+  haLicDouble: true,          // HA pair: licence on both MX units
+  // WAN bandwidth (sum of a site's links, Mbps) -> MX model. First rule with bw <= upTo wins per scope.
+  rules: [
+    { scope: 'branch', upTo: 200, model: 'MX67' },
+    { scope: 'branch', upTo: 500, model: 'MX85' },
+    { scope: 'branch', upTo: 1000, model: 'MX95' },
+    { scope: 'branch', upTo: 2000, model: 'MX105' },
+    { scope: 'branch', upTo: 1e9, model: 'MX250' },
+    { scope: 'hub', upTo: 4000, model: 'MX250' },
+    { scope: 'hub', upTo: 1e9, model: 'MX450' },
   ],
-  mxDcModels: ['MX250', 'MX450'],
-  haLicDouble: true,
-  derive: { y3: 0.30, y5: 0.50 }, // discounts vs N x 1Y, only when derive toggle is on
+  defaults: { ap: 'MR36', sw: 'MS130-24P', cam: 'MV12W', sensor: 'MT10', mxEd: 'adv', apEd: 'ent', swEd: 'ent' },
+  derive: { y3: 0.30, y5: 0.50 }, // discounts vs N x 1Y, only when the derive toggle is on
 };
+const DEFAULT_RULES = JSON.parse(JSON.stringify(CONFIG.rules));
+const DEFAULT_DEFAULTS = JSON.parse(JSON.stringify(CONFIG.defaults));
 
 /* Licence families: how to recognise a licence SKU for a given device family. */
 const CATALOGUE = {
@@ -183,18 +191,38 @@ function findLicence(pb, family, model, edition, opts = {}) {
 }
 
 /* ---------- Sizing ---------- */
-function mxModelFor(totalMbps, isDc) {
-  if (isDc) { const r = CONFIG.mxRules.find((x) => totalMbps <= x.upTo && CONFIG.mxDcModels.includes(x.model)); return (r || { model: CONFIG.mxDcModels[CONFIG.mxDcModels.length - 1] }).model; }
-  return (CONFIG.mxRules.find((x) => totalMbps <= x.upTo) || CONFIG.mxRules[CONFIG.mxRules.length - 1]).model;
+const HUB = /^(dc|hq|hub|data ?cent)/i;
+const isHub = (t) => HUB.test(String(t || ''));
+const isCloudSite = (t) => /^cloud/i.test(String(t || ''));
+
+function siteBw(site) {
+  if (Array.isArray(site.wan) && site.wan.length) return site.wan.reduce((a, l) => a + num(l.mbps), 0);
+  return num(site.bwMbps) || parseBwMbps(site.bw);
 }
 
-function autoCounts(site) {
-  const users = num(site.users), wired = num(site.wiredPorts);
-  const isDc = /dc|data ?cent/i.test(site.type || ''), isCloud = /cloud/i.test(site.type || '');
-  const aps = isCloud ? 0 : site.aps != null && site.aps !== '' ? num(site.aps) : isDc ? 0 : Math.ceil(users / CONFIG.usersPerAp);
-  const switches = isCloud ? 0 : site.switches != null && site.switches !== '' ? num(site.switches) : wired > 0 ? Math.ceil(wired / CONFIG.portsPerSwitch) : (isDc ? 0 : users > 0 ? 1 : 0);
-  return { aps, switches };
+function mxModelFor(bw, type, rules) {
+  rules = rules || CONFIG.rules;
+  const scope = isHub(type) ? 'hub' : 'branch';
+  const list = rules.filter((r) => r.scope === scope || r.scope === 'any').sort((a, b) => num(a.upTo) - num(b.upTo));
+  const hit = list.find((r) => bw <= num(r.upTo)) || list[list.length - 1];
+  return hit ? hit.model : '';
 }
+
+/* Pure sizing of one site from the rules. Independent of the price book. */
+function sizeSite(site, cfg) {
+  cfg = cfg || CONFIG;
+  const users = num(site.users), cloud = isCloudSite(site.type);
+  if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, hubSite: false, cloud: true };
+  const bw = siteBw(site);
+  const aps = site.wifi ? Math.ceil(users / cfg.usersPerAp) : 0;
+  const cameras = site.camera ? num(site.cameras) : 0;
+  const sensors = site.iot ? num(site.sensors) : 0;
+  const ports = site.switching ? Math.ceil(users * cfg.wiredShare) + aps + cameras : 0;
+  const switches = site.switching && ports > 0 ? Math.ceil(ports / cfg.portsPerSwitch) : 0;
+  const mx = (site.mxOverride || '').trim() || mxModelFor(bw, site.type, cfg.rules);
+  return { bw, mx, aps, switches, cameras, sensors, ports, hubSite: isHub(site.type), cloud: false };
+}
+const siteName = (s) => [s.city, s.country].filter(Boolean).join(', ') || s.name || 'Site';
 
 /* ---------- BoM ---------- */
 function mkLine(group, site, kind, e, qty, desc, note) {
@@ -202,48 +230,26 @@ function mkLine(group, site, kind, e, qty, desc, note) {
 }
 const gap = (group, site, requirement, qty) => ({ group, site, kind: 'gap', verified: false, requirement, qty });
 
-function buildInfraLines(pb, sites, opts = {}) {
-  const lines = [];
+function buildInfraLines(pb, sites, cfg) {
+  cfg = cfg || CONFIG; const d = cfg.defaults; const lines = [];
   for (const s of sites) {
-    const ha = !!s.ha, isDc = /dc|data ?cent/i.test(s.type || ''), isCloud = /cloud/i.test(s.type || '');
-    const { aps, switches } = autoCounts(s);
-    const name = s.name || 'Site';
-    if (isCloud) continue;
-    const bw = num(s.bwMbps) || parseBwMbps(s.bw);
-    const mxModel = s.mxModel || mxModelFor(bw, isDc);
-    const hwQty = ha ? 2 : 1, licQty = ha && CONFIG.haLicDouble ? 2 : 1;
-    const mxHw = findHardware(pb, mxModel);
-    if (mxHw) lines.push(mkLine('WAN', name, 'capex', mxHw, hwQty, `${mxHw.desc || mxModel} - ${name}${ha ? ' (HA pair)' : ''}`));
-    else lines.push(gap('WAN', name, `${mxModel} hardware`, hwQty));
-    const mxLic = findLicence(pb, 'mx', mxModel, s.mxEdition || opts.mxEdition || 'adv');
-    if (mxLic) lines.push(mkLine('Security', name, 'opex', mxLic, licQty, `${mxLic.desc || mxLic.key} - ${name}`));
-    else lines.push(gap('Security', name, `${mxModel} licence`, licQty));
-    if (aps > 0) {
-      const apModel = s.apModel || opts.apModel || 'MR36';
-      const hw = findHardware(pb, apModel), lic = findLicence(pb, 'mr', '', opts.apEdition || 'ent');
-      hw ? lines.push(mkLine('WiFi', name, 'capex', hw, aps, `${hw.desc || apModel} - ${name}`)) : lines.push(gap('WiFi', name, `${apModel} access point`, aps));
-      lic ? lines.push(mkLine('WiFi', name, 'opex', lic, aps, `${lic.desc || lic.key} - ${name}`)) : lines.push(gap('WiFi', name, 'AP licence', aps));
-    }
-    if (switches > 0) {
-      const swModel = s.swModel || opts.swModel || 'MS130-24P';
-      const hw = findHardware(pb, swModel), lic = findLicence(pb, 'ms', swModel, opts.swEdition || 'ent');
-      hw ? lines.push(mkLine('LAN', name, 'capex', hw, switches, `${hw.desc || swModel} - ${name}`)) : lines.push(gap('LAN', name, `${swModel} switch`, switches));
-      lic ? lines.push(mkLine('LAN', name, 'opex', lic, switches, `${lic.desc || lic.key} - ${name}`)) : lines.push(gap('LAN', name, `${swModel} licence`, switches));
-    }
-    const cams = num(s.cameras);
-    if (cams > 0) {
-      const m = s.camModel || opts.camModel || 'MV12W';
-      const hw = findHardware(pb, m), lic = findLicence(pb, 'mv', m);
-      hw ? lines.push(mkLine('Camera', name, 'capex', hw, cams, `${hw.desc || m} - ${name}`)) : lines.push(gap('Camera', name, `${m} camera`, cams));
-      lic ? lines.push(mkLine('Camera', name, 'opex', lic, cams, `${lic.desc || lic.key} - ${name}`)) : lines.push(gap('Camera', name, `${m} licence`, cams));
-    }
-    const sens = num(s.sensors);
-    if (sens > 0) {
-      const m = s.sensorModel || opts.sensorModel || 'MT10';
-      const hw = findHardware(pb, m), lic = findLicence(pb, 'mt', m);
-      hw ? lines.push(mkLine('IoT', name, 'capex', hw, sens, `${hw.desc || m} - ${name}`)) : lines.push(gap('IoT', name, `${m} sensor`, sens));
-      lic ? lines.push(mkLine('IoT', name, 'opex', lic, sens, `${lic.desc || lic.key} - ${name}`)) : lines.push(gap('IoT', name, `${m} licence`, sens));
-    }
+    const z = sizeSite(s, cfg); if (z.cloud) continue;
+    const name = `${siteName(s)} (${s.type})`; const ha = !!s.ha;
+    const hwQty = ha ? 2 : 1, licQty = ha && cfg.haLicDouble ? 2 : 1;
+    const mxHw = findHardware(pb, z.mx);
+    lines.push(mxHw ? mkLine('WAN', name, 'capex', mxHw, hwQty, `${mxHw.desc || z.mx} - ${name}${ha ? ' (HA pair)' : ''}`) : gap('WAN', name, `${z.mx} hardware`, hwQty));
+    const mxLic = findLicence(pb, 'mx', z.mx, d.mxEd);
+    lines.push(mxLic ? mkLine('Security', name, 'opex', mxLic, licQty, `${mxLic.desc || mxLic.key} - ${name}`) : gap('Security', name, `${z.mx} licence`, licQty));
+    const add = (group, qty, model, fam, ed, label, modelLic) => {
+      if (qty <= 0) return;
+      const hw = findHardware(pb, model), lic = findLicence(pb, fam, modelLic ? model : '', ed);
+      lines.push(hw ? mkLine(group, name, 'capex', hw, qty, `${hw.desc || model} - ${name}`) : gap(group, name, `${model} ${label}`, qty));
+      lines.push(lic ? mkLine(group, name, 'opex', lic, qty, `${lic.desc || lic.key} - ${name}`) : gap(group, name, `${model} licence`, qty));
+    };
+    add('WiFi', z.aps, s.apModel || d.ap, 'mr', d.apEd, 'access point', false);
+    add('LAN', z.switches, s.swModel || d.sw, 'ms', d.swEd, 'switch', true);
+    add('Camera', z.cameras, s.camModel || d.cam, 'mv', '', 'camera', false);
+    add('IoT', z.sensors, s.sensorModel || d.sensor, 'mt', '', 'sensor', false);
   }
   return lines;
 }
@@ -278,18 +284,21 @@ function termPrice(line, term, derive) {
 }
 
 function computeTotals(lines, opts = {}) {
-  const derive = !!opts.derive, svc = CONFIG.serviceTiers[opts.serviceTier || 'none'] || 0;
+  const derive = !!opts.derive, svcPct = num(opts.servicePct);
+  const dC = Math.min(Math.max(num(opts.discCapex), 0), 100) / 100, dO = Math.min(Math.max(num(opts.discOpex), 0), 100) / 100;
   let capex = 0; const opex = { 1: 0, 3: 0, 5: 0 }; const missing = { 1: 0, 3: 0, 5: 0 };
   for (const l of lines) {
     if (l.kind === 'capex') capex += (l.unit || 0) * l.qty;
     else if (l.kind === 'opex') for (const t of [1, 3, 5]) { const p = termPrice(l, t, derive).price; if (p == null) missing[t]++; else opex[t] += p * l.qty; }
   }
-  const wanAnnual = num(opts.wanAnnual);
-  const serviceAnnual = opex[1] * svc;
-  const tco = {};
-  for (const t of [1, 3, 5]) tco[t] = capex + opex[t] + (serviceAnnual + wanAnnual) * t;
-  const savings = { 3: tco[1] * 3 - tco[3], 5: tco[1] * 5 - tco[5] };
-  return { capex, opex, missing, serviceAnnual, wanAnnual, tco, savings };
+  const wanAnnual = num(opts.wanAnnual), serviceAnnual = opex[1] * svcPct; // service % is of 1Y list licence OpEx
+  const tco = {}, saving = {}, termSaving = {};
+  for (const t of [1, 3, 5]) {
+    tco[t] = capex * (1 - dC) + opex[t] * (1 - dO) + (serviceAnnual + wanAnnual) * t;
+    saving[t] = capex * dC + opex[t] * dO;
+  }
+  for (const t of [3, 5]) termSaving[t] = (capex * (1 - dC) + opex[1] * (1 - dO) * t + (serviceAnnual + wanAnnual) * t) - tco[t];
+  return { capex, opex, missing, serviceAnnual, wanAnnual, tco, saving, termSaving, discCapex: dC, discOpex: dO };
 }
 
 function bomToCsv(lines, derive) {
@@ -302,6 +311,6 @@ function bomToCsv(lines, derive) {
   return rows.join('\r\n');
 }
 
-const api = { CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, autoCounts, mxModelFor, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
+const api = { CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

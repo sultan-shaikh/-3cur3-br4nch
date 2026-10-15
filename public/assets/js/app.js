@@ -1,40 +1,44 @@
+/* Cisco Secure Branch Architect - app core: state, API, inputs, sizing UI, scan, generate */
 (function () {
 'use strict';
 const C = window.Core, $ = (id) => document.getElementById(id);
-const S = { pb: null, sites: [], lastBom: null, cur: 'USD', fx: 1 };
+const App = window.App = { C, $, S: { pb: null, sites: [], last: null, cur: 'USD', fx: 1, logo: null, img: null } };
+const S = App.S, esc = C.esc;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+Object.assign(App, { esc, sleep });
+
+/* ---------- Access + API ---------- */
 const KEY = 'csba_code';
 const getCode = () => { try { return sessionStorage.getItem(KEY) || ''; } catch { return ''; } };
 const setCode = (v) => { try { v ? sessionStorage.setItem(KEY, v) : sessionStorage.removeItem(KEY); } catch {} };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+App.getCode = getCode; App.setCode = setCode;
+App.showLock = (msg) => { $('lock').hidden = false; $('lockErr').hidden = !msg; $('lockErr').textContent = msg || ''; $('lockInput').focus(); };
 
-/* ---------- Access + API ---------- */
-function showLock(msg) { $('lock').hidden = false; $('lockErr').hidden = !msg; $('lockErr').textContent = msg || ''; $('lockInput').focus(); }
 async function api(payload) {
   let last;
   for (let i = 0; i < 3; i++) {
     let res;
     try { res = await fetch('/.netlify/functions/gemini-proxy', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-access-code': getCode() }, body: JSON.stringify(payload) }); }
-    catch (e) { last = new Error('Network error'); await sleep(1200 * (i + 1)); continue; }
-    const txt = await res.text(); let j; try { j = JSON.parse(txt); } catch { j = null; }
-    if (res.status === 401) { setCode(''); showLock('Access code rejected'); throw new Error('Access code required'); }
+    catch { last = new Error('Network error'); await sleep(1200 * (i + 1)); continue; }
+    const txt = await res.text(); let j = null; try { j = JSON.parse(txt); } catch {}
+    if (res.status === 401) { setCode(''); App.showLock('Access code rejected'); throw new Error('Access code required'); }
     if (res.ok) return j;
-    const msg = (j && (j.error && (j.error.message || j.error))) || `HTTP ${res.status}`;
+    const msg = (j && j.error && (j.error.message || j.error)) || `HTTP ${res.status}`;
     last = new Error(`[HTTP ${res.status}] ${msg}`);
     if ([429, 502, 503, 504].includes(res.status) && !(res.status === 504 && i >= 1)) { await sleep(1500 * (i + 1)); continue; }
     throw last;
   }
   throw last || new Error('Request failed');
 }
-async function generate(prompt, { image, json = true, max = 4096, system } = {}) {
+async function generate(prompt, { image, json = true, max = 4096, temp = 0.2 } = {}) {
   const parts = [{ text: prompt }];
   if (image) parts.push({ inlineData: { mimeType: image.mime, data: image.b64 } });
-  const body = { contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.2, maxOutputTokens: max, thinkingConfig: { thinkingBudget: 0 } } };
+  const body = { contents: [{ role: 'user', parts }], generationConfig: { temperature: temp, maxOutputTokens: max, thinkingConfig: { thinkingBudget: 0 } } };
   if (json) body.generationConfig.responseMimeType = 'application/json';
-  if (system) body.systemInstruction = { parts: [{ text: system }] };
-  const r = await api({ endpoint: 'generate', model: $('model').value, body });
+  const r = await api({ endpoint: 'generate', model: $('modelSelector').value, body });
   const c = r.candidates && r.candidates[0];
   if (!c) throw new Error(r.promptFeedback ? 'Blocked by safety filter' : 'Empty AI response');
-  if (c.finishReason === 'MAX_TOKENS') throw new Error('AI response was cut off; try fewer sites or a smaller request');
+  if (c.finishReason === 'MAX_TOKENS') throw new Error('AI response was cut off; try a smaller request');
   if (c.finishReason === 'SAFETY') throw new Error('Blocked by safety filter');
   return (c.content.parts || []).map((p) => p.text || '').join('');
 }
@@ -45,216 +49,250 @@ function extractJSON(t) {
   if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
   throw new Error('AI returned invalid JSON');
 }
-const safeHtml = (md) => window.DOMPurify.sanitize(window.marked.parse(String(md || ''), { breaks: true }));
+const safeHtml = (md) => window.DOMPurify.sanitize(window.marked.parse(String(md == null ? '' : md), { breaks: true }));
+const money = (v, dp = 0) => v == null || !isFinite(v) ? '—' : new Intl.NumberFormat(S.cur === 'USD' ? 'en-US' : 'en-GB', { style: 'currency', currency: S.cur, maximumFractionDigits: dp, minimumFractionDigits: dp }).format(v * S.fx);
+Object.assign(App, { api, generate, extractJSON, safeHtml, money });
+const setErr = (m) => { $('error').hidden = !m; $('error').textContent = m || ''; };
+const setStatus = (m) => { $('status').textContent = m || ''; };
+Object.assign(App, { setErr, setStatus });
 
 /* ---------- Models ---------- */
-async function loadModels() {
-  const sel = $('model');
+App.loadModels = async function () {
+  const sel = $('modelSelector');
   try {
     const r = await api({ endpoint: 'models' });
-    const ms = (r.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m) => m.name.replace('models/', ''))
-      .filter((n) => /^gemini-[\d.]+-(flash|pro)(-lite)?$/.test(n)).sort().reverse();
-    sel.innerHTML = '';
-    (ms.length ? ms : ['gemini-2.5-flash']).forEach((n) => sel.add(new Option(n, n)));
+    const ms = (r.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m) => m.name.replace('models/', '')).filter((n) => /^gemini-[\d.]+-(flash|pro)(-lite)?$/.test(n)).sort().reverse();
+    sel.innerHTML = ''; (ms.length ? ms : ['gemini-2.5-flash']).forEach((n) => sel.add(new Option(n, n)));
     const pref = [...sel.options].find((o) => o.value === 'gemini-2.5-flash'); if (pref) sel.value = pref.value;
-  } catch (e) { sel.innerHTML = ''; sel.add(new Option('gemini-2.5-flash', 'gemini-2.5-flash')); }
-}
-async function unlock(code) {
-  setCode(code);
-  try { await api({ endpoint: 'models' }); $('lock').hidden = true; await loadModels(); }
-  catch (e) { if (!/Access code/.test(e.message)) { $('lockErr').hidden = false; $('lockErr').textContent = e.message; } }
-}
+    sel.disabled = false; $('modelCount').textContent = `${sel.options.length} model(s) available. gemini-2.5-flash is recommended for speed.`;
+  } catch (e) { sel.innerHTML = ''; sel.add(new Option('gemini-2.5-flash', 'gemini-2.5-flash')); sel.disabled = false; $('modelCount').textContent = 'Model scan failed; using default. ' + e.message; }
+};
 
 /* ---------- Price book ---------- */
-$('pbFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0]; if (!f) return;
+App.onPriceBook = async function (file) {
   try {
-    S.pb = C.parsePriceBook(C.decodeBuffer(await f.arrayBuffer()));
+    S.pb = C.parsePriceBook(C.decodeBuffer(await file.arrayBuffer()));
     const s = S.pb.summary;
-    $('pbStatus').textContent = `Loaded ${s.total} products (${s.hardware} hardware, ${s.licences} licences/subscriptions).`;
-    $('pbStatus').className = 'muted';
-  } catch (err) { S.pb = null; $('pbStatus').textContent = err.message; $('pbStatus').className = 'err'; }
-});
+    $('priceStatus').textContent = `✔ Loaded ${s.total} products (${s.hardware} hardware, ${s.licences} licences/subscriptions).`;
+    $('priceStatus').className = 'small bold ok'; $('generateBtn').disabled = false;
+  } catch (err) { S.pb = null; $('priceStatus').textContent = '✖ ' + err.message; $('priceStatus').className = 'small bold err'; $('generateBtn').disabled = true; }
+};
 
-/* ---------- Sites table ---------- */
-const TYPES = ['Branch', 'Data Centre', 'HQ', 'Cloud'];
-function renderSites() {
-  const tb = $('sites').tBodies[0]; tb.innerHTML = '';
-  S.sites.forEach((s, i) => {
-    const tr = tb.insertRow();
-    const inp = (k, t = 'text') => { const el = document.createElement('input'); el.type = t; if (t === 'number') el.min = 0; el.value = s[k] == null ? '' : s[k]; el.dataset.i = i; el.dataset.k = k; return el; };
-    tr.insertCell().appendChild(inp('name'));
-    const sel = document.createElement('select'); TYPES.forEach((t) => sel.add(new Option(t, t))); sel.value = TYPES.includes(s.type) ? s.type : 'Branch'; sel.dataset.i = i; sel.dataset.k = 'type'; tr.insertCell().appendChild(sel);
-    ['users', 'bwMbps', 'wiredPorts', 'cameras', 'sensors'].forEach((k) => tr.insertCell().appendChild(inp(k, 'number')));
-    const ha = document.createElement('input'); ha.type = 'checkbox'; ha.checked = !!s.ha; ha.dataset.i = i; ha.dataset.k = 'ha'; tr.insertCell().appendChild(ha);
-    const del = document.createElement('button'); del.type = 'button'; del.className = 'btn'; del.textContent = '✕'; del.dataset.del = i; tr.insertCell().appendChild(del);
-  });
+/* ---------- Sites ---------- */
+const SITE_TYPES = ['Branch', 'HQ', 'DC'];
+const WAN_TYPES = ['MPLS', 'DIA', 'Broadband', '5G/LTE'];
+const newSite = () => ({ type: 'Branch', country: 'UK', city: '', users: 30, wan: [{ type: 'DIA', mbps: 100 }], ha: false, wifi: true, switching: true, camera: false, cameras: 0, iot: false, sensors: 0 });
+App.newSite = newSite;
+function normType(t) { t = String(t || ''); return /data ?cent|^dc\b/i.test(t) ? 'DC' : /hq|head|hub|campus/i.test(t) ? 'HQ' : 'Branch'; }
+function normWan(t) { t = String(t || ''); return /mpls|vpls|private/i.test(t) ? 'MPLS' : /lte|5g|4g|cell/i.test(t) ? '5G/LTE' : /broadband|dsl|cable|fibre ?to|fttp|fttc|adsl/i.test(t) ? 'Broadband' : 'DIA'; }
+App.normSite = function (r) {
+  const wan = (Array.isArray(r.wan) ? r.wan : []).map((l) => ({ type: normWan(l.type), mbps: C.num(l.mbps) })).filter((l) => l.mbps > 0);
+  if (!wan.length && (r.bwMbps || r.bw)) wan.push({ type: 'DIA', mbps: C.num(r.bwMbps) || C.parseBwMbps(r.bw) });
+  const cams = C.num(r.cameras), sens = C.num(r.sensors);
+  return { type: normType(r.type), country: String(r.country || '').slice(0, 40), city: String(r.city || r.name || '').slice(0, 60), users: C.num(r.users), wan: wan.length ? wan : [{ type: 'DIA', mbps: 100 }], ha: r.ha === true || /^(y|yes|true|1)$/i.test(String(r.ha)),
+    switching: r.switching == null ? true : bool(r.switching), wifi: r.wifi == null ? true : bool(r.wifi), camera: bool(r.camera) || cams > 0, cameras: cams, iot: bool(r.iot) || sens > 0, sensors: sens };
+};
+function bool(v) { return v === true || /^(y|yes|true|1|x)$/i.test(String(v)); }
+
+App.renderSites = function () {
+  const tb = $('siteTable').tBodies[0];
+  tb.innerHTML = S.sites.map((s, i) => `<tr data-i="${i}">
+    <td><select data-k="type">${SITE_TYPES.map((t) => `<option${t === s.type ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+    <td><input data-k="country" value="${esc(s.country)}" style="width:90px"></td>
+    <td><input data-k="city" value="${esc(s.city)}" style="width:110px"></td>
+    <td><input data-k="users" type="number" min="0" class="num-in" value="${esc(s.users)}"></td>
+    <td><div class="feat">
+      <label><input type="checkbox" data-k="switching"${s.switching ? ' checked' : ''}> LAN switching</label>
+      <label><input type="checkbox" data-k="wifi"${s.wifi ? ' checked' : ''}> WiFi</label>
+      <label><input type="checkbox" data-k="camera"${s.camera ? ' checked' : ''}> Cameras ${s.camera ? `<input type="number" min="0" data-k="cameras" value="${esc(s.cameras)}">` : ''}</label>
+      <label><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}> IoT sensors ${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label></div></td>
+    <td>${s.wan.map((l, j) => `<div class="wanrow"><select data-k="wantype" data-l="${j}">${WAN_TYPES.map((t) => `<option${t === l.type ? ' selected' : ''}>${t}</option>`).join('')}</select><input type="number" min="0" data-k="wanmbps" data-l="${j}" value="${esc(l.mbps)}"><span class="tiny muted">Mbps</span>${s.wan.length > 1 ? `<button class="x" type="button" data-act="rmwan" data-l="${j}" title="Remove link">✕</button>` : ''}</div>`).join('')}<button class="linkbtn" type="button" data-act="addwan">+ link</button></td>
+    <td class="center"><input type="checkbox" data-k="ha"${s.ha ? ' checked' : ''}></td>
+    <td><button class="x" type="button" data-act="del" title="Remove site">✕</button></td></tr>`).join('');
+};
+function siteEvent(e) {
+  const t = e.target, tr = t.closest('tr'); if (!tr) return; const s = S.sites[+tr.dataset.i]; if (!s) return;
+  const act = t.dataset.act;
+  if (e.type === 'click') {
+    if (act === 'del') { S.sites.splice(+tr.dataset.i, 1); App.renderSites(); }
+    else if (act === 'addwan') { s.wan.push({ type: 'DIA', mbps: 100 }); App.renderSites(); }
+    else if (act === 'rmwan') { s.wan.splice(+t.dataset.l, 1); App.renderSites(); }
+    return;
+  }
+  const k = t.dataset.k; if (!k) return;
+  if (k === 'wantype') s.wan[+t.dataset.l].type = t.value;
+  else if (k === 'wanmbps') s.wan[+t.dataset.l].mbps = C.num(t.value);
+  else if (t.type === 'checkbox') { s[k] = t.checked; if (e.type === 'change' && (k === 'camera' || k === 'iot')) { if (t.checked && !s[k === 'camera' ? 'cameras' : 'sensors']) s[k === 'camera' ? 'cameras' : 'sensors'] = 2; App.renderSites(); } }
+  else if (t.type === 'number') s[k] = C.num(t.value);
+  else s[k] = t.value;
 }
-$('sites').addEventListener('input', (e) => {
-  const t = e.target; if (t.dataset.k == null) return; const s = S.sites[+t.dataset.i];
-  s[t.dataset.k] = t.type === 'checkbox' ? t.checked : t.type === 'number' ? (t.value === '' ? 0 : Number(t.value)) : t.value;
-});
-$('sites').addEventListener('click', (e) => { const d = e.target.dataset.del; if (d != null) { S.sites.splice(+d, 1); renderSites(); } });
-$('addSite').addEventListener('click', () => { S.sites.push({ name: `Site ${S.sites.length + 1}`, type: 'Branch', users: 0, bwMbps: 100, wiredPorts: 0, cameras: 0, sensors: 0, ha: false }); renderSites(); });
+App.bindSites = function () {
+  ['input', 'change', 'click'].forEach((ev) => $('siteTable').tBodies[0].addEventListener(ev, siteEvent));
+  $('addSite').addEventListener('click', () => { S.sites.push(newSite()); App.renderSites(); });
+  $('tplBtn').addEventListener('click', () => dl(new Blob(['Type,Country,City,Users,WAN1_Type,WAN1_Mbps,WAN2_Type,WAN2_Mbps,HA,Switching,WiFi,Cameras,Sensors\r\nHQ,UK,London,400,MPLS,500,DIA,1000,Y,Y,Y,12,6\r\nBranch,UK,Bristol,60,DIA,200,Broadband,80,N,Y,Y,4,2\r\n'], { type: 'text/csv' }), 'sites_template.csv'));
+  $('siteCsv').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try {
+      const rows = C.parseCsvRows(C.decodeBuffer(await f.arrayBuffer())); const h = rows[0].map((x) => x.toLowerCase().replace(/[^a-z0-9]/g, ''));
+      const col = (...n) => h.findIndex((x) => n.includes(x));
+      const ix = { type: col('type', 'sitetype'), country: col('country'), city: col('city', 'site', 'name'), users: col('users', 'headcount'), ha: col('ha'), sw: col('switching', 'lan'), wifi: col('wifi'), cam: col('cameras', 'camera'), sen: col('sensors', 'iot') };
+      const out = [];
+      for (const r of rows.slice(1)) {
+        const g = (i) => (i >= 0 ? (r[i] || '').trim() : ''); const wan = [];
+        for (let n = 1; n <= 4; n++) { const a = col(`wan${n}type`), b = col(`wan${n}mbps`, `wan${n}bw`, `wan${n}bandwidth`); if (b >= 0 && C.num(r[b]) > 0) wan.push({ type: g(a), mbps: C.num(r[b]) }); }
+        out.push(App.normSite({ type: g(ix.type), country: g(ix.country), city: g(ix.city), users: g(ix.users), ha: g(ix.ha), switching: ix.sw >= 0 ? g(ix.sw) : null, wifi: ix.wifi >= 0 ? g(ix.wifi) : null, cameras: g(ix.cam), sensors: g(ix.sen), wan }));
+      }
+      if (!out.length) throw new Error('No site rows found');
+      S.sites = out; App.renderSites(); $('importNote').hidden = false; $('importNote').className = 'small ok'; $('importNote').textContent = `Imported ${out.length} site(s).`;
+    } catch (err) { $('importNote').hidden = false; $('importNote').className = 'small err'; $('importNote').textContent = 'Import failed: ' + err.message; }
+  });
+};
+function dl(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000); }
+App.dl = dl;
+
+/* ---------- Add-ons ---------- */
+const ADDONS = [['SWG', 'Secure Web Gateway'], ['ZTNA', 'Zero Trust Network Access'], ['CASB', 'CASB / SaaS control'], ['DLP', 'Data Loss Prevention'], ['FWaaS', 'Cloud Firewall (FWaaS/IPS)'], ['RBI', 'Remote Browser Isolation'], ['SANDBOX', 'Cloud sandbox'], ['DNS', 'DNS-layer security'], ['DEM', 'ThousandEyes digital experience']];
+App.renderAddons = function () { $('addonGrid').innerHTML = ADDONS.map(([v, l], i) => `<label class="addon"><input type="checkbox" value="${v}" data-name="${esc(l)}"${i < 4 ? ' checked' : ''}> ${l}</label>`).join(''); };
+App.activeAddons = () => [...document.querySelectorAll('#addonGrid input:checked')].map((c) => c.dataset.name);
+
+/* ---------- Sizing rules UI ---------- */
+App.renderRules = function (reset) {
+  const cfg = C.CONFIG;
+  if (reset) { cfg.rules = JSON.parse(JSON.stringify(C.DEFAULT_RULES)); Object.assign(cfg.defaults, JSON.parse(JSON.stringify(C.DEFAULT_DEFAULTS))); cfg.usersPerAp = 30; cfg.portsPerSwitch = 24; cfg.wiredShare = 0.5; cfg.haLicDouble = true; }
+  $('rulesBody').innerHTML = cfg.rules.map((r, i) => `<tr data-i="${i}"><td><select data-k="scope"><option value="branch"${r.scope === 'branch' ? ' selected' : ''}>Branch</option><option value="hub"${r.scope === 'hub' ? ' selected' : ''}>Hub (DC / HQ)</option><option value="any"${r.scope === 'any' ? ' selected' : ''}>Any</option></select></td>
+    <td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:120px"></td><td><input data-k="model" value="${esc(r.model)}" style="width:140px"></td><td><button class="x" type="button" data-act="rdel">✕</button></td></tr>`).join('');
+  $('cfgUsersPerAp').value = cfg.usersPerAp; $('cfgPortsPerSwitch').value = cfg.portsPerSwitch; $('cfgWired').value = cfg.wiredShare; $('cfgHaLic').value = cfg.haLicDouble ? '1' : '0';
+  const d = cfg.defaults; $('dfAp').value = d.ap; $('dfSw').value = d.sw; $('dfCam').value = d.cam; $('dfSensor').value = d.sensor; $('dfMxEd').value = d.mxEd; $('dfApEd').value = d.apEd; $('dfSwEd').value = d.swEd;
+};
+App.bindRules = function () {
+  const cfg = C.CONFIG;
+  const rb = $('rulesBody');
+  rb.addEventListener('input', (e) => { const tr = e.target.closest('tr'), r = cfg.rules[+tr.dataset.i], k = e.target.dataset.k; if (!r || !k) return; r[k] = k === 'upTo' ? (e.target.value === '' ? 1e9 : C.num(e.target.value)) : e.target.value; });
+  rb.addEventListener('click', (e) => { if (e.target.dataset.act === 'rdel') { cfg.rules.splice(+e.target.closest('tr').dataset.i, 1); App.renderRules(); } });
+  $('ruleAdd').addEventListener('click', () => { cfg.rules.push({ scope: 'branch', upTo: 1e9, model: '' }); App.renderRules(); });
+  $('rulesReset').addEventListener('click', () => App.renderRules(true));
+  const bind = (id, fn) => $(id).addEventListener('input', () => fn($(id).value));
+  bind('cfgUsersPerAp', (v) => { cfg.usersPerAp = Math.max(1, C.num(v, 30)); }); bind('cfgPortsPerSwitch', (v) => { cfg.portsPerSwitch = Math.max(1, C.num(v, 24)); });
+  bind('cfgWired', (v) => { cfg.wiredShare = Math.min(1, Math.max(0, C.num(v, 0.5))); }); $('cfgHaLic').addEventListener('change', () => { cfg.haLicDouble = $('cfgHaLic').value === '1'; });
+  [['dfAp', 'ap'], ['dfSw', 'sw'], ['dfCam', 'cam'], ['dfSensor', 'sensor'], ['dfMxEd', 'mxEd'], ['dfApEd', 'apEd'], ['dfSwEd', 'swEd']].forEach(([id, k]) => { $(id).addEventListener('input', () => { cfg.defaults[k] = $(id).value.trim(); }); $(id).addEventListener('change', () => { cfg.defaults[k] = $(id).value.trim(); }); });
+  $('previewBtn').addEventListener('click', preview);
+};
+function preview() {
+  const tb = $('previewBody'); if (!S.sites.length) { tb.innerHTML = '<tr><td colspan="10" class="center muted" style="padding:12px">No sites yet.</td></tr>'; return; }
+  const chk = (m) => !S.pb ? '' : C.findHardware(S.pb, m) ? ' <span class="ok" title="Found in price book">✔</span>' : ' <span class="err" title="Not in price book">✖</span>';
+  tb.innerHTML = S.sites.map((s, i) => { const z = C.sizeSite(s); return `<tr><td>${i + 1}</td><td>${esc(C.siteName(s))}</td><td>${esc(s.type)}</td><td>${z.bw} Mbps</td><td><b>${esc(z.mx || '—')}</b>${z.mx ? chk(z.mx) : ''}</td><td>${z.aps}</td><td>${z.switches}</td><td>${z.cameras}</td><td>${z.sensors}</td><td>${s.ha ? 'Y' : '–'}</td></tr>`; }).join('');
+}
+App.preview = preview;
 
 /* ---------- Diagram scan ---------- */
-$('scanFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0]; if (!f) return; e.target.value = '';
-  if (f.size > 4 * 1024 * 1024) { setErr('Image over 4MB. Use a smaller screenshot.'); return; }
-  setErr(''); $('status').textContent = 'Scanning diagram…';
+async function downscale(file) {
+  const url = URL.createObjectURL(file);
   try {
-    const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); });
-    const txt = await generate(
-      'Read this network diagram. Return JSON: {"sites":[{"name":string,"type":"Branch"|"Data Centre"|"HQ"|"Cloud","users":number,"bwMbps":number,"wiredPorts":number,"cameras":number,"sensors":number,"ha":boolean}],"confidence":"high"|"medium"|"low","notes":string}. Use 0 where not shown. Do not invent sites.',
-      { image: { mime: f.type || 'image/png', b64 }, max: 4096 });
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not read image')); i.src = url; });
+    const k = Math.min(1, 1800 / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+    return { mime: 'image/jpeg', b64: c.toDataURL('image/jpeg', 0.85).split(',')[1] };
+  } finally { URL.revokeObjectURL(url); }
+}
+App.bindScan = function () {
+  $('diagramInput').addEventListener('change', (e) => {
+    const f = e.target.files[0]; if (!f) return; S.img = f;
+    const box = $('imagePreviewBox'); $('imagePreview').src = URL.createObjectURL(f); box.style.display = 'flex'; $('clearImg').classList.remove('hidden');
+  });
+  $('clearImg').addEventListener('click', () => { S.img = null; $('diagramInput').value = ''; $('imagePreviewBox').style.display = 'none'; $('clearImg').classList.add('hidden'); });
+  $('scanBtn').addEventListener('click', scan);
+};
+async function scan() {
+  if (!S.img) return setErr('Choose a diagram image first.');
+  setErr(''); const prog = $('scanProgress'); prog.classList.add('on'); $('scanSummary').hidden = true;
+  const dots = [1, 2, 3, 4, 5, 6].map((n) => $('sp' + n)); dots.forEach((d) => (d.className = 'dot'));
+  let i = 0; dots[0].className = 'dot active'; const tm = setInterval(() => { if (i < 4) { dots[i].className = 'dot done'; i++; dots[i].className = 'dot active'; } }, 1500);
+  $('scanBtn').disabled = true;
+  try {
+    const image = await downscale(S.img);
+    const txt = await generate(`You are reading a network topology diagram for a Cisco Meraki + Secure Access design. Return ONLY JSON:
+{"sites":[{"type":"Branch"|"HQ"|"DC","country":string,"city":string,"users":number,"wan":[{"type":"MPLS"|"DIA"|"Broadband"|"5G/LTE","mbps":number}],"ha":boolean,"switching":boolean,"wifi":boolean,"cameras":number,"sensors":number}],"remoteUsers":number,"confidence":"high"|"medium"|"low","notes":string}
+Rules: use 0 / false where the diagram does not show something; do not invent sites; convert Gbps to Mbps; "ha" is true only if a resilient pair is drawn; cameras and sensors are counts of CCTV cameras and IoT/environmental sensors if shown.`, { image, max: 6000 });
     const j = extractJSON(txt);
-    S.sites = (j.sites || []).map((s) => ({ name: String(s.name || 'Site').slice(0, 60), type: TYPES.includes(s.type) ? s.type : 'Branch', users: C.num(s.users), bwMbps: C.num(s.bwMbps), wiredPorts: C.num(s.wiredPorts), cameras: C.num(s.cameras), sensors: C.num(s.sensors), ha: !!s.ha }));
-    renderSites();
-    $('scanNote').hidden = false; $('scanNote').textContent = `Review the extracted sites before generating (AI confidence: ${j.confidence || 'unknown'}). ${j.notes ? String(j.notes).slice(0, 300) : ''}`;
-  } catch (err) { setErr(err.message); }
-  $('status').textContent = '';
-});
-
-const setErr = (m) => { $('error').hidden = !m; $('error').textContent = m || ''; };
-
-/* ---------- Money ---------- */
-const money = (v) => v == null ? '—' : new Intl.NumberFormat('en-GB', { style: 'currency', currency: S.cur, maximumFractionDigits: 0 }).format(v * S.fx);
+    const sites = (j.sites || []).map(App.normSite); if (!sites.length) throw new Error('No sites were found in that image.');
+    S.sites = sites; App.renderSites(); if (C.num(j.remoteUsers) > 0) $('userCount').value = C.num(j.remoteUsers);
+    clearInterval(tm); dots.forEach((d) => (d.className = 'dot done'));
+    const s = $('scanSummary'); s.hidden = false; s.textContent = `Extracted ${sites.length} site(s). AI confidence: ${j.confidence || 'unknown'}. ⚠ Please review every row below before generating.${j.notes ? ' Notes: ' + String(j.notes).slice(0, 240) : ''}`;
+    $('meInputs').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) { clearInterval(tm); dots.forEach((d) => (d.className = 'dot')); setErr(err.message); }
+  $('scanBtn').disabled = false;
+}
 
 /* ---------- Generate ---------- */
-async function pickServices(pb, users) {
-  const cands = C.serviceCandidates(pb, null, users).slice(0, 150);
-  if (!cands.length) return { picks: [], note: 'No Secure Access / Secure Connect lines found in the price book.' };
-  const txt = await generate(
-    `Choose Cisco Secure Access / Secure Connect subscription SKUs for ${users} users (SSE: secure web gateway, ZTNA, DNS security, CASB/DLP as relevant). Choose ONLY from this list, copying SKU values exactly. Prefer one core package; add add-ons only if clearly useful. Return JSON {"skus":[{"sku":string,"reason":string}]}.\n${JSON.stringify(cands)}`, { max: 2048 });
-  const out = [], seen = new Set(), rejected = [];
-  for (const p of extractJSON(txt).skus || []) {
-    const e = C.lookupExact(pb, p.sku);
-    if (!e || e.kind !== 'sub' || seen.has(e.key)) { if (!e) rejected.push(String(p.sku)); continue; }
-    seen.add(e.key); out.push({ e, reason: String(p.reason || '').slice(0, 200) });
+const scopeOf = () => $('designScope').value;
+App.scopeOf = scopeOf;
+App.servicePct = () => C.num(document.querySelector('input[name=tier]:checked').value) + C.num(document.querySelector('input[name=role]:checked').value);
+App.serviceLabels = () => ({ tier: document.querySelector('input[name=tier]:checked').parentElement.querySelector('b').textContent, role: document.querySelector('input[name=role]:checked').parentElement.querySelector('b').textContent, tierPct: C.num(document.querySelector('input[name=tier]:checked').value), rolePct: C.num(document.querySelector('input[name=role]:checked').value) });
+
+async function pickSse(users) {
+  const platform = $('ssePlatform').value, edition = $('sseEdition').value, mods = App.activeAddons();
+  const re = platform === 'Secure Connect' ? /secure.?connect/i : /secure.?access|umbrella|duo|zero.?trust|ztna|\bsse\b|\bswg\b|casb|dlp|isolation|sandbox|dns/i;
+  let cands = C.serviceCandidates(S.pb, re, users);
+  if (!cands.length) cands = C.serviceCandidates(S.pb, null, users);
+  if (!cands.length) return { picks: [], note: `No ${platform} lines were found in the price book, so no SSE subscriptions were priced.` };
+  let ranked = false;
+  if (cands.length > 150) {
+    const kw = [edition, ...mods].join(' ').toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+    const score = (c) => { const h = (c.sku + ' ' + c.desc).toLowerCase(); return kw.reduce((a, w) => a + (h.includes(w) ? 1 : 0), 0); };
+    cands = cands.map((c) => ({ c, s: score(c) })).sort((a, b) => b.s - a.s).map((x) => x.c).slice(0, 150); ranked = true;
   }
-  return { picks: out, rejected };
+  const txt = await generate(`Choose Cisco ${platform} subscription SKUs for ${users} users. Edition/package: ${edition}. Required capabilities: ${mods.join(', ') || 'core SSE'}.
+Choose ONLY from this price-book list, copying "sku" values exactly. Prefer one core package covering the required capabilities; add add-ons only where a required capability is not covered. For each choice say whether it is priced per "user" or is a "flat" (per tenant / per site / other) item. Return JSON {"skus":[{"sku":string,"unit":"user"|"flat","reason":string}]}.
+${JSON.stringify(cands)}`, { max: 2500 });
+  const picks = [], seen = new Set(), rejected = [];
+  for (const p of extractJSON(txt).skus || []) {
+    const e = C.lookupExact(S.pb, p.sku);
+    if (!e || e.kind !== 'sub') { rejected.push(String(p.sku).slice(0, 60)); continue; } if (seen.has(e.key)) continue; seen.add(e.key);
+    picks.push({ e, unit: p.unit === 'flat' ? 'flat' : 'user', reason: String(p.reason || '').slice(0, 220) });
+  }
+  const notes = []; if (rejected.length) notes.push(`AI proposed SKUs that are not in the price book; excluded: ${rejected.join(', ')}.`);
+  if (ranked) notes.push('Price book has many SSE lines; the 150 most relevant to the chosen package were offered to the AI.');
+  if (!picks.length) notes.push('No valid SSE SKUs were selected, so no Secure Access subscriptions are priced.');
+  return { picks, note: notes.join(' ') };
 }
 
-async function onGenerate() {
+async function narrative(ctx) {
+  const lines = [];
+  lines.push(`Customer: ${ctx.company} (${ctx.industry}). Scope: ${ctx.scopeLabel}.`);
+  if (ctx.meraki) lines.push(`Meraki sites: ${JSON.stringify(ctx.sizing)}`);
+  if (ctx.sse) lines.push(`Secure Access: platform ${ctx.platform}, package ${ctx.edition}, ${ctx.users} users, region ${ctx.region}, modules ${ctx.mods.join(', ') || 'core'}.`);
+  const keys = [ctx.meraki ? '"wan","security","lan","wifi","camera","iot"' : '', ctx.sse ? '"sse"' : ''].filter(Boolean).join(',');
+  const txt = await generate(`You are a senior solutions architect writing a first-cut design for a managed service built on Cisco Meraki (MX SD-WAN & advanced security, MS/Catalyst switching, MR WiFi, MV smart cameras, MT sensors, Meraki Dashboard${ctx.sse ? ', Cisco Secure Access / Secure Connect SSE' : ''}).
+${lines.join('\n')}
+Rules: do NOT mention prices, SKUs or costs. Do not claim features that are not standard for the named Cisco products. Refer to the sizing above, do not change it. Be specific to the sites given.
+Return ONLY JSON with these string keys: "executive_summary", ${keys}, "risks". Each value is short markdown (max 130 words); use "" for any pillar that has no equipment in the sizing.`, { max: 6000, temp: 0.3 });
+  return extractJSON(txt);
+}
+
+App.generateDesign = async function () {
   setErr('');
+  const scope = scopeOf(), meraki = scope !== 'SSE', sse = scope !== 'Meraki', users = C.num($('userCount').value);
   if (!S.pb) return setErr('Load a price book first.');
-  if (!S.sites.length) return setErr('Add at least one site.');
-  $('go').disabled = true; $('status').textContent = 'Building…';
+  if (meraki && !S.sites.length) return setErr('Add at least one site.');
+  if (sse && users <= 0 && scope === 'SSE') return setErr('Enter the number of remote users.');
+  if (meraki && S.sites.some((s) => !(C.siteBw(s) > 0) && !C.isCloudSite(s.type))) return setErr('Every site needs at least one WAN link with bandwidth.');
+  const btn = $('generateBtn'); btn.disabled = true; setStatus('Building design…');
   try {
     S.cur = $('cur').value; S.fx = C.num($('fx').value, 1) || 1;
-    const customer = $('customer').value.trim() || 'Customer';
-    const derive = $('derive').checked, tier = $('svc').value, saUsers = C.num($('saUsers').value);
-    const infra = C.buildInfraLines(S.pb, S.sites);
-    let svcNote = '', svcPicks = [];
-    const tasks = [];
-    if ($('incSA').checked && saUsers > 0) tasks.push(pickServices(S.pb, saUsers).then((r) => { svcPicks = r.picks; if (r.note) svcNote = r.note; if (r.rejected && r.rejected.length) svcNote = `AI proposed SKUs not in the price book and they were excluded: ${r.rejected.join(', ')}`; }));
-    const summary = S.sites.map((s) => ({ name: s.name, type: s.type, users: s.users, bwMbps: s.bwMbps, ha: !!s.ha, aps: C.autoCounts(s).aps, switches: C.autoCounts(s).switches, cameras: s.cameras, sensors: s.sensors }));
-    let narrative = null, narrErr = '';
-    tasks.push(generate(
-      `Write a concise solution design for ${customer} using Cisco Meraki (MX SD-WAN/security, MS/Catalyst LAN, MR WiFi, MV cameras, MT sensors)${$('incSA').checked ? ' and Cisco Secure Access / Secure Connect (SSE)' : ''}. Sites: ${JSON.stringify(summary)}. Remote users: ${saUsers}. Do NOT mention any prices, SKUs or costs. Return JSON {"executive_summary":string,"lan":string,"wan":string,"security":string,"wifi":string,"camera":string,"iot":string,"risks":string}. Each value is short markdown (max 120 words). Use "" for pillars with no equipment.`,
-      { max: 4096 }).then((t) => { narrative = extractJSON(t); }).catch((e) => { narrErr = e.message; }));
-    await Promise.allSettled(tasks);
-
+    const company = $('companyName').value.trim() || 'Customer';
+    const infra = meraki ? C.buildInfraLines(S.pb, S.sites) : [];
+    const sizing = meraki ? S.sites.map((s) => { const z = C.sizeSite(s); return { site: C.siteName(s), type: s.type, users: s.users, wan: s.wan.map((l) => `${l.type} ${l.mbps}Mbps`), ha: !!s.ha, mx: z.mx, aps: z.aps, switches: z.switches, cameras: z.cameras, sensors: z.sensors }; }) : [];
+    let svc = { picks: [], note: '' }, narr = null, narrErr = '';
+    const jobs = [];
+    if (sse && users > 0) jobs.push(pickSse(users).then((r) => { svc = r; }).catch((e) => { svc = { picks: [], note: 'Secure Access SKU selection failed: ' + e.message }; }));
+    jobs.push(narrative({ company, industry: $('industry').value, scopeLabel: $('designScope').selectedOptions[0].text, meraki, sse, sizing, platform: $('ssePlatform').value, edition: $('sseEdition').value, users, region: $('region').value, mods: App.activeAddons() }).then((r) => { narr = r; }).catch((e) => { narrErr = e.message; }));
+    await Promise.all(jobs);
     const lines = infra.slice();
-    for (const p of svcPicks) lines.push({ group: 'Secure Access', site: 'All users', kind: 'opex', sku: p.e.skus[1] || p.e.skus[3] || p.e.skus[5] || p.e.key, key: p.e.key, desc: p.e.desc, qty: saUsers, terms: p.e.terms, skuByTerm: p.e.skus, verified: true, note: p.reason });
+    for (const p of svc.picks) lines.push({ group: 'Secure Access', site: 'All users', kind: 'opex', sku: p.e.skus[1] || p.e.skus[3] || p.e.skus[5] || p.e.key, key: p.e.key, desc: p.e.desc, qty: p.unit === 'flat' ? 1 : users, terms: p.e.terms, skuByTerm: p.e.skus, verified: true, note: p.reason });
     const agg = C.aggregateLines(lines);
-    const totals = C.computeTotals(agg.lines, { derive, serviceTier: tier, wanAnnual: C.num($('wanAnnual').value) });
-    S.lastBom = { agg, totals, derive };
-    S.lastRender = { customer, agg, totals, derive, tier, narrative, narrErr, svcNote, saUsers, sa: $('incSA').checked };
-    await render(S.lastRender);
+    S.last = { company, scope, meraki, sse, users, agg, narr, narrErr, svcNote: svc.note, derive: $('derive').checked, sizing, sitesSnap: JSON.parse(JSON.stringify(S.sites)), sseCfg: { platform: $('ssePlatform').value, edition: $('sseEdition').value, mods: App.activeAddons(), region: $('region').value }, industry: $('industry').value.trim() || 'Enterprise', svcLabels: App.serviceLabels(), servicePct: App.servicePct(), wanAnnual: C.num($('wanAnnual').value), ts: new Date() };
+    await App.renderReport(S.last);
   } catch (err) { setErr(err.message); }
-  $('go').disabled = false; $('status').textContent = '';
-}
-$('go').addEventListener('click', onGenerate);
-
-/* ---------- Render ---------- */
-const GROUPS = ['WAN', 'Security', 'LAN', 'WiFi', 'Camera', 'IoT', 'Secure Access'];
-function bomTable(lines, kind, derive) {
-  const L = lines.filter((l) => l.kind === kind); if (!L.length) return '';
-  const head = kind === 'capex' ? '<th>SKU</th><th>Description</th><th>Qty</th><th class="num">Unit</th><th class="num">Total</th>' : '<th>SKU</th><th>Description</th><th>Qty</th><th class="num">1Y</th><th class="num">3Y</th><th class="num">5Y</th>';
-  let rows = '';
-  for (const g of GROUPS) for (const l of L.filter((x) => x.group === g)) {
-    if (kind === 'capex') rows += `<tr><td>${C.esc(l.sku)}</td><td>${C.esc(l.desc)}</td><td>${l.qty}</td><td class="num">${money(l.unit)}</td><td class="num">${money(l.unit * l.qty)}</td></tr>`;
-    else rows += `<tr><td>${C.esc(l.sku)}</td><td>${C.esc(l.desc)}</td><td>${l.qty}</td>` + [1, 3, 5].map((t) => { const r = C.termPrice(l, t, derive); return `<td class="num">${r.price == null ? 'n/a' : money(r.price * l.qty) + (r.derived ? '*' : '')}</td>`; }).join('') + '</tr>';
-  }
-  return `<div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-async function render(d) {
-  const { agg, totals: t } = d; const r = $('report'); r.hidden = false;
-  let h = `<div class="card"><h2>${C.esc(d.customer)} — Secure Branch design</h2>`;
-  if (d.narr || d.narrative) h += `<div class="prose">${safeHtml(d.narrative.executive_summary)}</div>`;
-  else if (d.narrErr) h += `<p class="warn">Narrative unavailable: ${C.esc(d.narrErr)}. The BoM below is unaffected.</p>`;
-  if (agg.gaps.length) h += `<div class="flag"><b>${agg.gaps.length} requirement(s) have no matching SKU in the price book and are excluded from totals.</b><ul>${agg.gaps.map((g) => `<li>${C.esc(g.site)} — ${C.esc(g.requirement)} × ${g.qty}</li>`).join('')}</ul>Add the SKUs to the price book or adjust manually.</div>`;
-  if (d.svcNote) h += `<div class="flag">${C.esc(d.svcNote)}</div>`;
-  if (d.sa && d.saUsers > 0 && !agg.lines.some((l) => l.group === 'Secure Access')) h += `<div class="flag">No Secure Access lines were priced.</div>`;
-  h += `<div class="kpis"><div class="kpi"><b>${money(t.capex)}</b><span>Hardware CapEx</span></div><div class="kpi"><b>${money(t.opex[1])}</b><span>Licences 1Y</span></div><div class="kpi"><b>${money(t.opex[3])}</b><span>Licences 3Y</span></div><div class="kpi"><b>${money(t.opex[5])}</b><span>Licences 5Y</span></div></div></div>`;
-  h += `<div class="card"><h2>Architecture</h2><div class="tools"><button class="btn" data-z="in" type="button">＋</button><button class="btn" data-z="out" type="button">－</button><button class="btn" data-z="reset" type="button">Reset</button><button class="btn" data-z="svg" type="button">Download SVG</button></div><div class="diagram" id="dia"><div class="stage" id="stage"></div></div><p class="muted">Drag to pan. Use ＋/－ to zoom.</p></div>`;
-  if (d.narrative) {
-    const names = { wan: 'WAN / SD-WAN', security: 'Security', lan: 'LAN', wifi: 'WiFi', camera: 'Cameras', iot: 'IoT', risks: 'Risks & assumptions' };
-    h += '<div class="card"><h2>Design by pillar</h2>' + Object.keys(names).filter((k) => d.narrative[k]).map((k) => `<h3>${names[k]}</h3><div class="prose">${safeHtml(d.narrative[k])}</div>`).join('') + '</div>';
-  }
-  h += `<div class="card"><h2>Bill of materials</h2><h3>Hardware (one-time)</h3>${bomTable(agg.lines, 'capex', d.derive)}<p><b>Total hardware: ${money(t.capex)}</b></p><h3>Subscriptions (contract term totals)</h3>${bomTable(agg.lines, 'opex', d.derive)}<p><b>Total licences:</b> 1Y ${money(t.opex[1])} · 3Y ${money(t.opex[3])} · 5Y ${money(t.opex[5])}</p>${d.derive ? '<p class="warn">* Estimated: derived from the 1Y price using the configured discount. Not a price-book value.</p>' : ''}`;
-  h += `<h3>Total cost of ownership</h3><div class="tablewrap"><table><thead><tr><th>Term</th><th class="num">Hardware</th><th class="num">Licences</th><th class="num">Service + WAN</th><th class="num">TCO</th><th class="num">Saving vs 1Y renewals</th></tr></thead><tbody>` +
-    [1, 3, 5].map((y) => `<tr><td>${y}Y</td><td class="num">${money(t.capex)}</td><td class="num">${money(t.opex[y])}</td><td class="num">${money((t.serviceAnnual + t.wanAnnual) * y)}</td><td class="num"><b>${money(t.tco[y])}</b></td><td class="num">${y === 1 ? '—' : money(t.savings[y])}</td></tr>`).join('') + `</tbody></table></div>`;
-  h += `<p><button id="csv" class="btn" type="button">Export BoM (CSV)</button> <button id="print" class="btn" type="button">Print / PDF</button></p></div>`;
-  r.innerHTML = h;
-  $('csv').onclick = exportCsv; $('print').onclick = () => window.print();
-  await drawDiagram(d);
-  r.scrollIntoView({ behavior: 'smooth' });
-}
-
-/* ---------- Diagram (deterministic, built from the sites) ---------- */
-const id = (s, i) => 'N' + i;
-const lbl = (s) => String(s).replace(/["\[\]{}()<>#&;|`\\]/g, ' ').slice(0, 40);
-async function drawDiagram(d) {
-  let src = 'flowchart TB\n  DASH["Meraki Dashboard (cloud)"]\n'; let n = 0;
-  if (d.sa) src += '  SA["Cisco Secure Access (SSE)"]\n  USR["Remote users"] --> SA\n';
-  src += '  INET(("Internet"))\n';
-  S.sites.forEach((s, i) => {
-    if (/cloud/i.test(s.type)) { src += `  C${i}["${lbl(s.name)}"]\n  INET --- C${i}\n`; return; }
-    const c = C.autoCounts(s);
-    src += `  subgraph G${i}["${lbl(s.name)} - ${lbl(s.type)}"]\n    M${i}["MX${s.ha ? ' HA pair' : ''}"]\n`;
-    if (c.switches) src += `    W${i}["${c.switches} x MS switch"]\n    M${i} --- W${i}\n`;
-    if (c.aps) src += `    A${i}["${c.aps} x MR AP"]\n    ${c.switches ? 'W' : 'M'}${i} --- A${i}\n`;
-    if (s.cameras) src += `    V${i}["${s.cameras} x MV camera"]\n    ${c.switches ? 'W' : 'M'}${i} --- V${i}\n`;
-    if (s.sensors) src += `    T${i}["${s.sensors} x MT sensor"]\n    ${c.switches ? 'W' : 'M'}${i} --- T${i}\n`;
-    src += `  end\n  M${i} ---|"${lbl(s.bwMbps)} Mbps"| INET\n  M${i} -.-> DASH\n`;
-  });
-  if (d.sa) src += '  INET --- SA\n';
-  const stage = $('stage');
-  try {
-    window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral', flowchart: { useMaxWidth: false } });
-    const { svg } = await window.mermaid.render('mmd' + Date.now(), src);
-    stage.innerHTML = window.DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true, svgFilters: true }, ADD_TAGS: ['foreignObject'] });
-  } catch (e) { stage.textContent = 'Diagram could not be rendered.'; }
-  initPan();
-}
-const P = { x: 0, y: 0, k: 1, drag: null };
-function applyT() { $('stage').style.transform = `translate(${P.x}px,${P.y}px) scale(${P.k})`; }
-function initPan() {
-  P.x = 0; P.y = 0; P.k = 1; applyT();
-  const dia = $('dia');
-  dia.addEventListener('pointerdown', (e) => { P.drag = { x: e.clientX - P.x, y: e.clientY - P.y }; dia.classList.add('drag'); dia.setPointerCapture(e.pointerId); });
-  dia.addEventListener('pointermove', (e) => { if (!P.drag) return; P.x = e.clientX - P.drag.x; P.y = e.clientY - P.drag.y; applyT(); });
-  const end = () => { P.drag = null; dia.classList.remove('drag'); };
-  dia.addEventListener('pointerup', end); dia.addEventListener('pointercancel', end);
-}
-document.addEventListener('click', (e) => {
-  const z = e.target.dataset && e.target.dataset.z; if (!z) return;
-  if (z === 'in') P.k = Math.min(4, P.k * 1.25); else if (z === 'out') P.k = Math.max(0.2, P.k / 1.25); else if (z === 'reset') { P.x = 0; P.y = 0; P.k = 1; }
-  else if (z === 'svg') { const svg = $('stage').querySelector('svg'); if (!svg) return; const c = svg.cloneNode(true); const b = new Blob([new XMLSerializer().serializeToString(c)], { type: 'image/svg+xml' }); dl(b, 'architecture.svg'); return; }
-  applyT();
-});
-function dl(blob, name) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
-function exportCsv() { if (S.lastBom) dl(new Blob([C.bomToCsv(S.lastBom.agg.lines, S.lastBom.derive)], { type: 'text/csv' }), 'bom.csv'); }
-
-/* ---------- Init ---------- */
-$('lockForm').addEventListener('submit', (e) => { e.preventDefault(); unlock($('lockInput').value.trim()); });
-$('lockBtn').addEventListener('click', () => { setCode(''); showLock(''); });
-$('fx').addEventListener('change', () => { if (S.lastRender) { S.cur = $('cur').value; S.fx = C.num($('fx').value, 1) || 1; render(S.lastRender); } });
-$('cur').addEventListener('change', () => $('fx').dispatchEvent(new Event('change')));
-if (getCode()) unlock(getCode()); else showLock('');
-S.sites = [{ name: 'HQ', type: 'HQ', users: 120, bwMbps: 500, wiredPorts: 48, cameras: 8, sensors: 4, ha: true }, { name: 'Branch 1', type: 'Branch', users: 30, bwMbps: 100, wiredPorts: 12, cameras: 2, sensors: 2, ha: false }];
-renderSites();
+  btn.disabled = !S.pb; setStatus('');
+};
 })();

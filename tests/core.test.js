@@ -8,24 +8,25 @@ assert.strictEqual(C.findHardware(pb, 'MX999'), null);
 assert.strictEqual(C.findHardware(pb, 'MR36').key, 'MR36-HW', 'not bracket');
 assert.strictEqual(C.findLicence(pb, 'mx', 'MX85', 'adv').key, 'LIC-MX85-SEC');
 assert.strictEqual(C.findLicence(pb, 'mr', '', 'ent').key, 'LIC-ENT');
-assert.strictEqual(C.mxModelFor(150), 'MX67'); assert.strictEqual(C.mxModelFor(800), 'MX95'); assert.strictEqual(C.mxModelFor(1500, true), 'MX250');
+assert.strictEqual(C.mxModelFor(150, 'Branch'), 'MX67'); assert.strictEqual(C.mxModelFor(800, 'Branch'), 'MX95'); assert.strictEqual(C.mxModelFor(1500, 'DC'), 'MX250'); assert.strictEqual(C.mxModelFor(9000, 'HQ'), 'MX450');
 const sites = [
- { name: 'Leeds', type: 'Branch', users: 61, bw: '300Mbps', wiredPorts: 30, cameras: 4, sensors: 2, ha: false },
- { name: 'DC1', type: 'Data Centre', users: 0, bw: '1Gbps', ha: true },
- { name: 'Remote', type: 'Branch', users: 5, bw: '100Mbps', mxModel: 'MX999' },
+ { type: 'Branch', city: 'Leeds', country: 'UK', users: 61, wan: [{ type: 'DIA', mbps: 200 }, { type: 'Broadband', mbps: 100 }], wifi: true, switching: true, camera: true, cameras: 4, iot: true, sensors: 2 },
+ { type: 'DC', city: 'London', country: 'UK', users: 0, wan: [{ type: 'MPLS', mbps: 1000 }], ha: true },
+ { type: 'Branch', city: 'Remote', country: 'UK', users: 5, wan: [{ type: 'DIA', mbps: 100 }], mxOverride: 'MX999' },
 ];
+const z = C.sizeSite(sites[0]); assert.strictEqual(z.mx, 'MX85'); assert.strictEqual(z.aps, 3); assert.strictEqual(z.switches, 2); // 31+3+4=38 ports
 const lines = C.buildInfraLines(pb, sites);
 const { lines: agg, gaps } = C.aggregateLines(lines);
 console.log(agg.map(l => `${l.group} ${l.kind} ${l.sku} x${l.qty}`).join('\n'));
 console.log('GAPS', gaps.map(g => g.requirement + ' x' + g.qty));
-const ap = agg.find(l => l.group === 'WiFi' && l.kind === 'capex'); assert.strictEqual(ap.qty, 3);
-const sw = agg.find(l => l.group === 'LAN' && l.kind === 'capex'); assert.strictEqual(sw.qty, 2);
 assert(gaps.some(g => /MX999/.test(g.requirement)), 'gap flagged');
-const mx1 = agg.find(l=>l.key==='LIC-MX250-SEC'); assert.strictEqual(mx1.qty, 2, 'HA licence doubled');
-const t = C.computeTotals(agg, { serviceTier: 'foundation', wanAnnual: 1000, derive: true });
+assert.strictEqual(agg.find(l => l.key === 'LIC-MX250-SEC').qty, 2, 'HA licence doubled');
+assert.strictEqual(agg.find(l => l.group === 'Camera' && l.kind === 'capex').qty, 4);
+const t = C.computeTotals(agg, { servicePct: 0.04, wanAnnual: 1000, derive: true, discCapex: 10, discOpex: 5 });
 console.log(t);
-assert(t.capex > 0 && t.opex[3] > 0);
-assert.strictEqual(C.termPrice(pb.byKey.get('LIC-MX250-SEC').terms && { terms: pb.byKey.get('LIC-MX250-SEC').terms }, 3, false).price, null, 'no derive w/o toggle');
+assert(t.capex > 0 && t.opex[3] > 0 && t.saving[1] > 0 && Math.abs(t.serviceAnnual - t.opex[1] * 0.04) < 1e-6);
+const t0 = C.computeTotals(agg, { derive: false });
+assert(t0.missing[5] > 0, 'underived missing flagged');
 const cands = C.serviceCandidates(pb); assert(cands.some(c => /SA-ESS/.test(c.sku)));
 console.log(C.bomToCsv(agg, false).split('\n').slice(0,3).join('\n'));
 console.log('ALL PASS');

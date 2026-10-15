@@ -24,3 +24,6 @@ MT10-HW,Meraki MT10 Temp Humidity Sensor,99,,,
 LIC-MT-1YR,Meraki MT Sensor License 1 Year,,20,,
 SA-ESS-USER-1YR,Cisco Secure Access Essentials per user 1 Year,,60,,
 SA-ESS-USER-3YR,Cisco Secure Access Essentials per user 3 Year,,,150,
+SA-ADV-USER-1YR,Cisco Secure Access Advantage per user 1 Year,,110,,
+SA-ADV-USER-3YR,Cisco Secure Access Advantage per user 3 Year,,,280,
+SA-ADV-USER-5YR,Cisco Secure Access Advantage per user 5 Year,,,,450

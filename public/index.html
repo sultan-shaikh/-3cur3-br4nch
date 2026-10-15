@@ -3,76 +3,230 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
 <meta name="robots" content="noindex,nofollow">
 <title>Cisco Secure Branch Architect</title>
 <link rel="stylesheet" href="assets/styles.css">
 <script src="assets/vendor/purify.min.js" defer></script>
 <script src="assets/vendor/marked.min.js" defer></script>
 <script src="assets/vendor/mermaid.min.js" defer></script>
+<script src="assets/vendor/pptxgen.bundle.js" defer></script>
 <script src="assets/js/core.js" defer></script>
 <script src="assets/js/app.js" defer></script>
+<script src="assets/js/diagram.js" defer></script>
+<script src="assets/js/report.js" defer></script>
+<script src="assets/js/proposal.js" defer></script>
+<script src="assets/js/boot.js" defer></script>
 </head>
 <body>
-<div id="lock" class="modal" hidden>
+
+<!-- ACCESS GATE -->
+<div id="lock" class="modal small noprint" hidden>
   <form id="lockForm" class="card">
     <h2>Access required</h2>
-    <p class="muted">Enter your access code to use the tool.</p>
+    <p class="muted small" style="margin:0">Enter your access code to use the tool.</p>
     <input id="lockInput" type="password" autocomplete="current-password" placeholder="Access code" required>
-    <p id="lockErr" class="err" hidden></p>
-    <button class="btn primary" type="submit">Unlock</button>
+    <p id="lockErr" class="err small" hidden style="margin:0"></p>
+    <button class="btn dark" type="submit">Unlock</button>
   </form>
 </div>
 
-<header class="top">
-  <div><h1>Cisco Secure Branch Architect</h1><span class="muted">Meraki LAN · WAN · Security · WiFi · Camera · IoT + Secure Access</span></div>
-  <div class="row"><select id="model" title="Gemini model"></select><button id="lockBtn" class="btn" type="button">Lock</button></div>
-</header>
+<!-- INTRO -->
+<div id="introModal" class="modal noprint" hidden>
+  <div class="card">
+    <div class="center">
+      <div class="hero"><span class="logo-dots"><i></i><i></i><i></i><i></i><i></i></span></div>
+      <h1 style="font-size:24px">Cisco Secure Branch Architect</h1>
+      <p class="muted" style="margin:4px 0 0">First-cut design &amp; proposal tool for all-inclusive Meraki + Secure Access engagements</p>
+    </div>
+    <div class="cards">
+      <div><span>🖼️</span><span>Scan a whiteboard / Visio diagram and auto-extract sites, WAN links &amp; HA pairs</span></div>
+      <div><span>🧮</span><span>MX, switch, AP, camera and sensor sizing rules you can review &amp; tweak</span></div>
+      <div><span>📋</span><span>Bill of Materials strictly matched against your uploaded SKU price book</span></div>
+      <div><span>📊</span><span>Topology diagram, TCO with discounts, and a customer-ready PPTX / PDF</span></div>
+    </div>
+    <div class="grid g2">
+      <button id="introStart" class="btn dark" type="button" style="padding:14px">🎯 Start a new design</button>
+      <button id="introDemo" class="btn" type="button" style="padding:14px">▶ Load demo scenario</button>
+    </div>
+    <p class="tiny muted center" style="margin:14px 0 0">Covers LAN · WAN/SD-WAN · Security · WiFi · Camera · IoT on Cisco Meraki, plus Cisco Secure Access / Secure Connect (SSE). Prices come only from your price book.</p>
+  </div>
+</div>
+
+<nav class="nav noprint">
+  <div class="in">
+    <h1><span class="logo-dots"><i></i><i></i><i></i><i></i><i></i></span><span>Cisco Secure Branch Architect</span><span class="badge">Meraki + Secure Access</span></h1>
+    <div class="row">
+      <button id="introBtn" class="btn sm" type="button">About</button>
+      <button id="lockBtn" class="btn sm" type="button">Lock</button>
+    </div>
+  </div>
+</nav>
 
 <main>
-<section class="card" id="s1">
-  <h2>1 · Price book</h2>
-  <p class="muted">CSV columns: SKU, Description, HardwarePrice, Price_1Y, Price_3Y, Price_5Y. Only SKUs in this file are ever priced.</p>
-  <input id="pbFile" type="file" accept=".csv,text/csv">
-  <p id="pbStatus" class="muted">No price book loaded.</p>
-</section>
+<div id="inputSection" class="panel noprint">
 
-<section class="card" id="s2">
-  <h2>2 · Customer &amp; scope</h2>
-  <div class="grid">
-    <label>Customer<input id="customer" value="Customer"></label>
-    <label>Remote / Secure Access users<input id="saUsers" type="number" min="0" value="0"></label>
-    <label>Currency<select id="cur"><option>USD</option><option>GBP</option><option>EUR</option></select></label>
-    <label>FX rate (from USD)<input id="fx" type="number" step="0.0001" value="1"></label>
-    <label>Managed service tier<select id="svc"><option value="none">None</option><option value="foundation">Foundation (2%)</option><option value="enhanced">Enhanced (5%)</option><option value="premium">Premium (8%)</option></select></label>
-    <label>WAN circuits (annual, all sites)<input id="wanAnnual" type="number" min="0" value="0"></label>
+  <div class="modelbox">
+    <label class="f" for="modelSelector" style="color:#00506b">1. AI model</label>
+    <div class="row">
+      <select id="modelSelector" disabled><option>Loading models…</option></select>
+      <button id="rescanBtn" class="btn sm" type="button">Rescan</button>
+    </div>
+    <p id="modelCount" class="tiny" style="margin:4px 0 0;color:#00729b;font-style:italic"></p>
   </div>
-  <div class="checks">
-    <label><input type="checkbox" id="incSA" checked> Cisco Secure Access / Secure Connect</label>
-    <label><input type="checkbox" id="derive"> Derive missing 3Y/5Y prices (30% / 50% discount) — estimate</label>
+
+  <div class="vision">
+    <h3 style="font-size:17px;margin-bottom:4px">📷 Have a diagram? (Whiteboard / Visio / Screenshot)</h3>
+    <p class="small muted" style="margin:0 0 14px">Upload any network topology image. AI extracts sites, WAN links, bandwidths, HA pairs and which services each site needs. Review the table before generating.</p>
+    <div id="imagePreviewBox" style="margin-bottom:12px;display:none;justify-content:center"><img id="imagePreview" alt="Diagram preview"></div>
+    <div class="row wrap" style="justify-content:center">
+      <input type="file" id="diagramInput" accept="image/*" style="width:auto;max-width:280px">
+      <button id="scanBtn" class="btn blue" type="button">🔍 Scan Diagram</button>
+      <button id="clearImg" class="btn sm hidden" type="button">Clear</button>
+    </div>
+    <div id="scanProgress" class="scan-progress">
+      <div class="scan-item"><span class="dot" id="sp1"></span>Uploading image to AI model…</div>
+      <div class="scan-item"><span class="dot" id="sp2"></span>Identifying sites, types &amp; locations…</div>
+      <div class="scan-item"><span class="dot" id="sp3"></span>Extracting WAN links &amp; bandwidths…</div>
+      <div class="scan-item"><span class="dot" id="sp4"></span>Detecting HA pairs &amp; redundancy…</div>
+      <div class="scan-item"><span class="dot" id="sp5"></span>Detecting LAN / WiFi / camera / IoT requirements…</div>
+      <div class="scan-item"><span class="dot" id="sp6"></span>Building site table…</div>
+      <div id="scanSummary" class="small bold" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--s200);color:var(--blue-d)" hidden></div>
+    </div>
   </div>
-</section>
 
-<section class="card" id="s3">
-  <h2>3 · Sites</h2>
-  <div class="row wrap">
-    <label class="btn">Scan diagram <input id="scanFile" type="file" accept="image/*" hidden></label>
-    <button id="addSite" class="btn" type="button">+ Add site</button>
+  <div class="step">
+    <h2>2. Architecture requirements</h2>
+    <div class="row"><label class="tiny bold muted" for="designScope" style="text-transform:uppercase">Design scope</label>
+      <select id="designScope" style="width:auto;font-weight:700;color:#00506b;background:var(--blue-l);border:2px solid var(--blue)">
+        <option value="Unified">Unified (Meraki + Secure Access)</option>
+        <option value="Meraki">Meraki only (LAN/WAN/WiFi/Camera/IoT)</option>
+        <option value="SSE">Secure Access only (SSE)</option>
+      </select></div>
   </div>
-  <p id="scanNote" class="warn" hidden></p>
-  <div class="tablewrap"><table id="sites">
-    <thead><tr><th>Name</th><th>Type</th><th>Users</th><th>WAN Mbps</th><th>Wired ports</th><th>Cameras</th><th>Sensors</th><th>HA</th><th></th></tr></thead>
-    <tbody></tbody>
-  </table></div>
-  <p class="muted">APs and switches are sized automatically (30 users/AP, 24 ports/switch). Leave blank values as 0.</p>
-</section>
 
-<section class="card">
-  <button id="go" class="btn primary big" type="button">Generate design &amp; BoM</button>
-  <span id="status" class="muted"></span>
-  <p id="error" class="err" hidden></p>
-</section>
+  <div class="grid g4" style="margin-bottom:6px">
+    <label class="f">Customer name<input id="companyName" value="Acme Corp"></label>
+    <label class="f">Industry<input id="industry" value="Retail" placeholder="e.g. Retail, Healthcare"></label>
+    <label class="f">Currency<select id="cur"><option>USD</option><option>GBP</option><option>EUR</option></select></label>
+    <label class="f">FX rate (from USD)<input id="fx" type="number" step="0.0001" min="0" value="1"></label>
+  </div>
 
-<section id="report" hidden></section>
+  <div id="sseInputs" style="margin-top:22px">
+    <div class="row" style="margin-bottom:12px"><span class="pillar blue">Pillar 1: Secure Access (SSE)</span><span class="small muted">Per-user cloud security</span></div>
+    <div class="grid g4">
+      <label class="f">Remote / roaming users<input id="userCount" type="number" min="0" value="800"></label>
+      <label class="f">Primary region<select id="region"><option>Global</option><option selected>EMEA</option><option>North America</option><option>APAC</option></select></label>
+      <label class="f">SSE platform<select id="ssePlatform"><option value="Secure Access">Cisco Secure Access</option><option value="Secure Connect">Cisco Secure Connect (Meraki-integrated)</option></select></label>
+      <label class="f">Package / edition<select id="sseEdition"><option>Essentials</option><option selected>Advantage</option></select></label>
+    </div>
+    <div style="margin-top:14px"><label class="f" style="margin-bottom:6px">Modules &amp; add-ons</label><div class="addons" id="addonGrid"></div></div>
+  </div>
+
+  <div id="meInputs" class="sep">
+    <div class="row wrap" style="margin-bottom:12px"><span class="pillar slate">Pillar 2: Meraki sites</span><span class="small muted">WAN bandwidth sizes the MX · services tick the LAN / WiFi / camera / IoT hardware</span></div>
+    <div class="tablewrap"><table class="site-table" id="siteTable">
+      <thead><tr><th>Type</th><th>Country</th><th>City</th><th>Users</th><th>Services</th><th style="min-width:230px">WAN links (type + Mbps)</th><th class="center">HA</th><th></th></tr></thead>
+      <tbody></tbody></table></div>
+    <div class="row wrap" style="margin-top:12px">
+      <button id="addSite" class="btn blue" type="button">＋ Add new site</button>
+      <label class="btn" style="cursor:pointer">⬆ Bulk import sites (CSV)<input id="siteCsv" type="file" accept=".csv,text/csv" hidden></label>
+      <button id="tplBtn" class="linkbtn" type="button">Download CSV template</button>
+    </div>
+    <p id="importNote" class="small warn" hidden></p>
+  </div>
+
+  <div class="sep">
+    <div class="step" style="border:0;margin-bottom:8px;padding:0"><h2>3. Managed service wrap</h2></div>
+    <div class="grid g2" style="gap:24px">
+      <div class="box violet"><h4 style="color:#4c1d95">A) Service tiers (mutually exclusive)</h4>
+        <label class="svc"><input type="radio" name="tier" value="0" checked><span><b>None / Product only</b></span></label>
+        <label class="svc"><input type="radio" name="tier" value="0.02"><span><b>Foundation (2%)</b><small>Essential monitoring &amp; incident management</small></span></label>
+        <label class="svc"><input type="radio" name="tier" value="0.03"><span><b>Foundation Plus (3%)</b><small>Adds proactive change management</small></span></label>
+        <label class="svc"><input type="radio" name="tier" value="0.05"><span><b>Premium (5%)</b><small>Full lifecycle &amp; strategic support</small></span></label>
+      </div>
+      <div class="box teal"><h4 style="color:#134e4a">B) In-life support expertise (mutually exclusive)</h4>
+        <label class="svc"><input type="radio" name="role" value="0" checked><span><b>None</b></span></label>
+        <label class="svc"><input type="radio" name="role" value="0.02"><span><b>Service Ops Manager (SOM) - 2%</b><small>Operational governance</small></span></label>
+        <label class="svc"><input type="radio" name="role" value="0.03"><span><b>Tech Ops Analyst (TOA) - 3%</b><small>Technical oversight</small></span></label>
+        <label class="svc"><input type="radio" name="role" value="0.05"><span><b>Customer Success Manager (CSM) - 5%</b><small>Strategic alignment</small></span></label>
+      </div>
+    </div>
+    <div class="grid g3" style="margin-top:14px"><label class="f">Managed connectivity / circuits, annual (optional)<input id="wanAnnual" type="number" min="0" value="0"></label></div>
+  </div>
+
+  <div class="sep">
+    <div class="row between wrap" style="margin-bottom:6px">
+      <h2 style="font-size:17px">3b. Sizing rules <span class="small muted" style="font-weight:400">(vendor default logic — override before generating)</span></h2>
+      <button id="rulesReset" class="btn sm" type="button">↺ Reset to defaults</button>
+    </div>
+    <p class="small muted" style="margin:0 0 10px">Total site WAN bandwidth selects the MX model. Edit thresholds or model names; changes apply immediately to sizing and the BoM. Models must exist in your price book or the line is flagged.</p>
+    <div class="tablewrap"><table class="mini" id="rulesTable"><thead><tr><th>Site scope</th><th>Up to (Mbps)</th><th>MX model</th><th></th></tr></thead><tbody id="rulesBody"></tbody></table></div>
+    <button id="ruleAdd" class="linkbtn" type="button" style="margin-top:6px">+ Add custom rule</button>
+    <div class="grid g4" style="margin-top:16px">
+      <label class="f">Users per access point<input id="cfgUsersPerAp" type="number" min="1"></label>
+      <label class="f">Ports per switch<input id="cfgPortsPerSwitch" type="number" min="1"></label>
+      <label class="f">Share of users on wired ports (0–1)<input id="cfgWired" type="number" min="0" max="1" step="0.05"></label>
+      <label class="f">HA: licence both MX units<select id="cfgHaLic"><option value="1">Yes</option><option value="0">No (hardware only)</option></select></label>
+      <label class="f">Access point model<input id="dfAp"></label>
+      <label class="f">Switch model<input id="dfSw"></label>
+      <label class="f">Camera model<input id="dfCam"></label>
+      <label class="f">IoT sensor model<input id="dfSensor"></label>
+      <label class="f">MX licence edition<select id="dfMxEd"><option value="adv">Advanced Security</option><option value="ent">Enterprise</option><option value="sdw">SD-WAN Plus</option></select></label>
+      <label class="f">AP licence edition<select id="dfApEd"><option value="ent">Enterprise</option><option value="adv">Advanced</option></select></label>
+      <label class="f">Switch licence edition<select id="dfSwEd"><option value="ent">Enterprise</option><option value="adv">Advanced</option></select></label>
+    </div>
+    <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--s300)">
+      <div class="row between wrap" style="margin-bottom:8px"><h3 style="font-size:14px">Preview: equipment assigned to your actual sites</h3><button id="previewBtn" class="btn blue sm" type="button">▶ Preview assignment</button></div>
+      <div class="tablewrap"><table class="mini"><thead><tr><th>#</th><th>Site</th><th>Type</th><th>Total BW</th><th>MX</th><th>APs</th><th>Switches</th><th>Cameras</th><th>Sensors</th><th>HA</th></tr></thead>
+        <tbody id="previewBody"><tr><td colspan="10" class="center muted" style="padding:12px;font-style:italic">Click “Preview assignment” to check sizing against your current sites.</td></tr></tbody></table></div>
+    </div>
+  </div>
+
+  <div class="grid g2 sep" style="align-items:end;margin-top:30px">
+    <div>
+      <label class="f" for="priceCsv">Price book (required — BoM is generated <u>only</u> from this SKU list)</label>
+      <input type="file" id="priceCsv" accept=".csv,text/csv" style="margin-top:4px">
+      <p class="tiny muted" style="margin:4px 0 0">Format: SKU, Description, HardwarePrice, Price_1Y, Price_3Y, Price_5Y. Leave a cell blank if that price doesn't exist. Term prices are the TOTAL contract price for that term. Licence SKUs with -1YR/-3YR/-5YR suffixes are merged automatically. Anything the AI proposes that isn't in this file is flagged, never invented.</p>
+      <p id="priceStatus" class="small bold warn" style="margin:4px 0 0">⚠ No price book uploaded yet — BoM generation is blocked until one is provided.</p>
+      <label class="row small" style="margin-top:6px"><input type="checkbox" id="derive"> Estimate missing 3Y / 5Y prices (30% / 50% off 1Y) — marked *</label>
+    </div>
+    <div><button id="generateBtn" class="btn dark big" type="button" disabled>4. Generate design &amp; BoM</button>
+      <p id="status" class="small muted center" style="margin:8px 0 0"></p><p id="error" class="err small" hidden style="margin:8px 0 0"></p></div>
+  </div>
+
+  <div class="proposal" id="proposalPanel">
+    <div style="margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid #c7d2fe"><h3>5. Customer-ready proposal generator (MSP)</h3>
+      <p class="small" style="margin:4px 0 0;color:#4338ca">Configure your managed-service presentation. Generates a tailored PPTX and a printable PDF. Run step 4 first.</p></div>
+    <div class="grid g3">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">Prepared by (your name)<input id="ppBy" placeholder="e.g. Jane Doe"></label>
+        <label class="f">Product / service name<input id="ppMsp" value="Managed Secure Branch"></label>
+        <div class="row"><label class="f grow">Primary colour<span class="row" style="margin-top:4px"><input type="color" id="ppPrimary" value="#005073"><span id="ppPrimaryL" class="tiny mono muted">#005073</span></span></label>
+          <label class="f grow">Accent colour<span class="row" style="margin-top:4px"><input type="color" id="ppAccent" value="#049FD9"><span id="ppAccentL" class="tiny mono muted">#049FD9</span></span></label></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <label class="f">Customer logo (optional)<input type="file" id="ppLogo" accept="image/*"></label>
+        <label class="f">Deck tone<select id="ppTone"><option value="Executive">Executive (business value &amp; ROI)</option><option value="Technical">Technical (architecture &amp; features)</option></select></label>
+        <div class="chips">
+          <label><input type="checkbox" id="ck_prob" checked> Problem</label><label><input type="checkbox" id="ck_cases" checked> Use cases</label>
+          <label><input type="checkbox" checked disabled> Solution</label><label><input type="checkbox" id="ck_arch" checked> Diagram</label>
+          <label><input type="checkbox" id="ck_bom" checked> BoM</label><label><input type="checkbox" id="ck_roi" checked> ROI</label>
+          <label><input type="checkbox" id="ck_comp" checked> Why us</label><label><input type="checkbox" id="ck_road" checked> Roadmap</label>
+        </div>
+      </div>
+      <label class="f" style="display:flex;flex-direction:column">Discovery / key pain points (optional)<textarea id="ppCtx" style="flex:1;min-height:120px;resize:none" placeholder="Raw notes the AI should build the deck around, e.g. 'Retiring MPLS this year, store Wi-Fi is unreliable, wants CCTV and fridge-temperature monitoring on one dashboard…'"></textarea></label>
+    </div>
+    <div class="row wrap" style="margin-top:16px;padding-top:14px;border-top:1px solid #c7d2fe">
+      <button id="ppBtn" class="btn indigo" type="button">Generate proposal (PPTX &amp; PDF)</button>
+      <button id="ppPrint" class="btn hidden" type="button">🖨 Print / save formal PDF</button>
+      <span id="ppStatus" class="small hidden" style="color:#4338ca"><span class="loader" style="width:14px;height:14px;border-width:2px"></span> <span id="ppStatusText">Preparing…</span></span>
+    </div>
+  </div>
+</div>
+
+<div id="reportSection" class="report hidden"></div>
+<div id="pdfProposalView"></div>
 </main>
 </body>
 </html>
