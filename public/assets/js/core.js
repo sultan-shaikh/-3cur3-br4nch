@@ -24,6 +24,38 @@ const CONFIG = {
 const DEFAULT_RULES = JSON.parse(JSON.stringify(CONFIG.rules));
 const DEFAULT_DEFAULTS = JSON.parse(JSON.stringify(CONFIG.defaults));
 
+
+/* ---------- Model catalogue (what each site can be assigned) ---------- */
+const sv = (series, vs) => vs.map((v) => `${series}-${v}`);
+const MODELS = {
+  mx: [{ group: 'MX security & SD-WAN', ids: ['MX67','MX67W','MX67C','MX68','MX68W','MX68CW','MX75','MX85','MX95','MX105','MX250','MX450'] }],
+  ap: [
+    { group: 'MR Wi-Fi 6 / 6E', ids: ['MR28','MR36','MR36H','MR44','MR46','MR46E','MR56','MR57'] },
+    { group: 'MR outdoor', ids: ['MR76','MR78','MR86'] },
+    { group: 'CW Wi-Fi 6E (Meraki-managed)', ids: ['CW9162I','CW9164I','CW9166I','CW9166D1'] }],
+  sw: [
+    { group: 'MS120', ids: sv('MS120', ['8','8LP','8FP','24','24P','48','48LP','48FP']) },
+    { group: 'MS125', ids: sv('MS125', ['24','24P','48','48LP','48FP']) },
+    { group: 'MS130', ids: [...sv('MS130', ['8','8P','12X','24','24P','48','48P']), 'MS130R-8P'] },
+    { group: 'MS150', ids: sv('MS150', ['24T-4G','24P-4G','24T-4X','24P-4X','48T-4G','48LP-4G','48FP-4G','48T-4X','48LP-4X','48FP-4X']) },
+    { group: 'MS210', ids: sv('MS210', ['24','24P','48','48LP','48FP']) },
+    { group: 'MS225', ids: sv('MS225', ['24','24P','48','48LP','48FP']) },
+    { group: 'MS250', ids: sv('MS250', ['24','24P','48','48LP','48FP']) },
+    { group: 'MS350', ids: sv('MS350', ['24','24P','24X','48','48LP','48FP']) },
+    { group: 'MS355', ids: sv('MS355', ['24X','24X2','48X','48X2']) },
+    { group: 'MS390', ids: sv('MS390', ['24','24P','24U','24UX','48','48P','48U','48UX','48UX2']) },
+    { group: 'MS410 / MS425 / MS450 aggregation', ids: ['MS410-16','MS410-32','MS425-16','MS425-32','MS450-12'] },
+    { group: 'Catalyst 9300-M (cloud-managed)', ids: sv('C9300', ['24T-M','24P-M','24U-M','24UX-M','48T-M','48P-M','48U-M','48UX-M']) },
+    { group: 'Catalyst 9200L-M (cloud-managed)', ids: sv('C9200L', ['24T-4G-M','24P-4G-M','48T-4G-M','48P-4G-M']) }],
+  cam: [
+    { group: 'MV indoor', ids: ['MV2','MV12W','MV12N','MV12WE','MV13','MV13M','MV22','MV22X','MV23','MV23X','MV32','MV33'] },
+    { group: 'MV outdoor', ids: ['MV52','MV53X','MV63','MV63X','MV72','MV72X','MV73','MV73X','MV84X','MV93','MV93X'] }],
+  sensor: [{ group: 'MT sensors', ids: ['MT10','MT11','MT12','MT14','MT15','MT20','MT30','MT40'] }],
+};
+/* Access ports on a switch model, taken from its name (MS130-24P -> 24). 0 if unknown. */
+const switchPorts = (m) => { const x = /-(\d+)/.exec(String(m || '')); return x ? parseInt(x[1], 10) : 0; };
+const switchFamily = (m) => (/^C9/i.test(String(m || '')) ? 'cat' : 'ms');
+
 /* Licence families: how to recognise a licence SKU for a given device family. */
 const CATALOGUE = {
   mx:  { hw: /^MX\d/i,  lic: /^LIC-MX/i,  editions: { ent: /(^|-)ENT(-|$)/i, adv: /(^|-)(ADV|SEC)(-|$)/i, sdw: /SDW|SDWAN/i } },
@@ -210,17 +242,20 @@ function mxModelFor(bw, type, rules) {
 
 /* Pure sizing of one site from the rules. Independent of the price book. */
 function sizeSite(site, cfg) {
-  cfg = cfg || CONFIG;
+  cfg = cfg || CONFIG; const d = cfg.defaults;
   const users = num(site.users), cloud = isCloudSite(site.type);
   if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, hubSite: false, cloud: true };
   const bw = siteBw(site);
+  const apModel = (site.apModel || '').trim() || d.ap, swModel = (site.swModel || '').trim() || d.sw;
+  const camModel = (site.camModel || '').trim() || d.cam, sensorModel = (site.sensorModel || '').trim() || d.sensor;
   const aps = site.wifi ? Math.ceil(users / cfg.usersPerAp) : 0;
   const cameras = site.camera ? num(site.cameras) : 0;
   const sensors = site.iot ? num(site.sensors) : 0;
   const ports = site.switching ? Math.ceil(users * cfg.wiredShare) + aps + cameras : 0;
-  const switches = site.switching && ports > 0 ? Math.ceil(ports / cfg.portsPerSwitch) : 0;
+  const swPorts = switchPorts(swModel) || cfg.portsPerSwitch;
+  const switches = site.switching && ports > 0 ? Math.ceil(ports / swPorts) : 0;
   const mx = (site.mxOverride || '').trim() || mxModelFor(bw, site.type, cfg.rules);
-  return { bw, mx, aps, switches, cameras, sensors, ports, hubSite: isHub(site.type), cloud: false };
+  return { bw, mx, aps, switches, cameras, sensors, ports, swPorts, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
 }
 const siteName = (s) => [s.city, s.country].filter(Boolean).join(', ') || s.name || 'Site';
 
@@ -246,10 +281,10 @@ function buildInfraLines(pb, sites, cfg) {
       lines.push(hw ? mkLine(group, name, 'capex', hw, qty, `${hw.desc || model} - ${name}`) : gap(group, name, `${model} ${label}`, qty));
       lines.push(lic ? mkLine(group, name, 'opex', lic, qty, `${lic.desc || lic.key} - ${name}`) : gap(group, name, `${model} licence`, qty));
     };
-    add('WiFi', z.aps, s.apModel || d.ap, 'mr', d.apEd, 'access point', false);
-    add('LAN', z.switches, s.swModel || d.sw, 'ms', d.swEd, 'switch', true);
-    add('Camera', z.cameras, s.camModel || d.cam, 'mv', '', 'camera', false);
-    add('IoT', z.sensors, s.sensorModel || d.sensor, 'mt', '', 'sensor', false);
+    add('WiFi', z.aps, z.apModel, 'mr', d.apEd, 'access point', false);
+    add('LAN', z.switches, z.swModel, switchFamily(z.swModel), d.swEd, 'switch', true);
+    add('Camera', z.cameras, z.camModel, 'mv', '', 'camera', false);
+    add('IoT', z.sensors, z.sensorModel, 'mt', '', 'sensor', false);
   }
   return lines;
 }
@@ -311,6 +346,6 @@ function bomToCsv(lines, derive) {
   return rows.join('\r\n');
 }
 
-const api = { CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
+const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

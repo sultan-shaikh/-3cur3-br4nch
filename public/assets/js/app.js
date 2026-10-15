@@ -90,11 +90,20 @@ App.normSite = function (r) {
   if (!wan.length && (r.bwMbps || r.bw)) wan.push({ type: 'DIA', mbps: C.num(r.bwMbps) || C.parseBwMbps(r.bw) });
   const cams = C.num(r.cameras), sens = C.num(r.sensors);
   return { type: normType(r.type), country: String(r.country || '').slice(0, 40), city: String(r.city || r.name || '').slice(0, 60), users: C.num(r.users), wan: wan.length ? wan : [{ type: 'DIA', mbps: 100 }], ha: r.ha === true || /^(y|yes|true|1)$/i.test(String(r.ha)),
-    switching: r.switching == null ? true : bool(r.switching), wifi: r.wifi == null ? true : bool(r.wifi), camera: bool(r.camera) || cams > 0, cameras: cams, iot: bool(r.iot) || sens > 0, sensors: sens };
+    switching: r.switching == null ? true : bool(r.switching), wifi: r.wifi == null ? true : bool(r.wifi), camera: bool(r.camera) || cams > 0, cameras: cams, iot: bool(r.iot) || sens > 0, sensors: sens,
+    mxOverride: knownModel('mx', r.mxOverride || r.mxModel), apModel: knownModel('ap', r.apModel), swModel: knownModel('sw', r.swModel), camModel: knownModel('cam', r.camModel), sensorModel: knownModel('sensor', r.sensorModel) };
 };
+function knownModel(kind, v) { v = String(v || '').trim().toUpperCase(); return v && C.MODELS[kind].some((g) => g.ids.includes(v)) ? v : ''; }
 function bool(v) { return v === true || /^(y|yes|true|1|x)$/i.test(String(v)); }
 
+
+function modelOpts(kind, cur, defLabel) {
+  const d = C.CONFIG.defaults;
+  return `<option value="">${esc(defLabel)}</option>` + C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('');
+}
+const modelSel = (kind, key, s, def) => `<select class="msel" data-k="${key}" title="Model for this site">${modelOpts(kind, s[key] || '', 'Default (' + def + ')')}</select>`;
 App.renderSites = function () {
+  const D = C.CONFIG.defaults;
   const tb = $('siteTable').tBodies[0];
   tb.innerHTML = S.sites.map((s, i) => `<tr data-i="${i}">
     <td><select data-k="type">${SITE_TYPES.map((t) => `<option${t === s.type ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
@@ -102,10 +111,11 @@ App.renderSites = function () {
     <td><input data-k="city" value="${esc(s.city)}" style="width:110px"></td>
     <td><input data-k="users" type="number" min="0" class="num-in" value="${esc(s.users)}"></td>
     <td><div class="feat">
-      <label><input type="checkbox" data-k="switching"${s.switching ? ' checked' : ''}> LAN switching</label>
-      <label><input type="checkbox" data-k="wifi"${s.wifi ? ' checked' : ''}> WiFi</label>
-      <label><input type="checkbox" data-k="camera"${s.camera ? ' checked' : ''}> Cameras ${s.camera ? `<input type="number" min="0" data-k="cameras" value="${esc(s.cameras)}">` : ''}</label>
-      <label><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}> IoT sensors ${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label></div></td>
+      <div class="frow"><label><input type="checkbox" data-k="switching"${s.switching ? ' checked' : ''}> LAN switching</label>${s.switching ? modelSel('sw', 'swModel', s, D.sw) : ''}</div>
+      <div class="frow"><label><input type="checkbox" data-k="wifi"${s.wifi ? ' checked' : ''}> WiFi</label>${s.wifi ? modelSel('ap', 'apModel', s, D.ap) : ''}</div>
+      <div class="frow"><label><input type="checkbox" data-k="camera"${s.camera ? ' checked' : ''}> Cameras ${s.camera ? `<input type="number" min="0" data-k="cameras" value="${esc(s.cameras)}">` : ''}</label>${s.camera ? modelSel('cam', 'camModel', s, D.cam) : ''}</div>
+      <div class="frow"><label><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}> IoT sensors ${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label>${s.iot ? modelSel('sensor', 'sensorModel', s, D.sensor) : ''}</div></div></td>
+    <td>${C.isCloudSite(s.type) ? '' : `<select class="msel" data-k="mxOverride" title="Firewall / SD-WAN appliance">${modelOpts('mx', s.mxOverride || '', 'Auto (by bandwidth)')}</select>`}</td>
     <td>${s.wan.map((l, j) => `<div class="wanrow"><select data-k="wantype" data-l="${j}">${WAN_TYPES.map((t) => `<option${t === l.type ? ' selected' : ''}>${t}</option>`).join('')}</select><input type="number" min="0" data-k="wanmbps" data-l="${j}" value="${esc(l.mbps)}"><span class="tiny muted">Mbps</span>${s.wan.length > 1 ? `<button class="x" type="button" data-act="rmwan" data-l="${j}" title="Remove link">✕</button>` : ''}</div>`).join('')}<button class="linkbtn" type="button" data-act="addwan">+ link</button></td>
     <td class="center"><input type="checkbox" data-k="ha"${s.ha ? ' checked' : ''}></td>
     <td><button class="x" type="button" data-act="del" title="Remove site">✕</button></td></tr>`).join('');
@@ -122,25 +132,25 @@ function siteEvent(e) {
   const k = t.dataset.k; if (!k) return;
   if (k === 'wantype') s.wan[+t.dataset.l].type = t.value;
   else if (k === 'wanmbps') s.wan[+t.dataset.l].mbps = C.num(t.value);
-  else if (t.type === 'checkbox') { s[k] = t.checked; if (e.type === 'change' && (k === 'camera' || k === 'iot')) { if (t.checked && !s[k === 'camera' ? 'cameras' : 'sensors']) s[k === 'camera' ? 'cameras' : 'sensors'] = 2; App.renderSites(); } }
+  else if (t.type === 'checkbox') { s[k] = t.checked; if (e.type === 'change') { if (t.checked && (k === 'camera' || k === 'iot') && !s[k === 'camera' ? 'cameras' : 'sensors']) s[k === 'camera' ? 'cameras' : 'sensors'] = 2; if (['camera', 'iot', 'switching', 'wifi'].includes(k)) App.renderSites(); } }
   else if (t.type === 'number') s[k] = C.num(t.value);
   else s[k] = t.value;
 }
 App.bindSites = function () {
   ['input', 'change', 'click'].forEach((ev) => $('siteTable').tBodies[0].addEventListener(ev, siteEvent));
   $('addSite').addEventListener('click', () => { S.sites.push(newSite()); App.renderSites(); });
-  $('tplBtn').addEventListener('click', () => dl(new Blob(['Type,Country,City,Users,WAN1_Type,WAN1_Mbps,WAN2_Type,WAN2_Mbps,HA,Switching,WiFi,Cameras,Sensors\r\nHQ,UK,London,400,MPLS,500,DIA,1000,Y,Y,Y,12,6\r\nBranch,UK,Bristol,60,DIA,200,Broadband,80,N,Y,Y,4,2\r\n'], { type: 'text/csv' }), 'sites_template.csv'));
+  $('tplBtn').addEventListener('click', () => dl(new Blob(['Type,Country,City,Users,WAN1_Type,WAN1_Mbps,WAN2_Type,WAN2_Mbps,HA,Switching,WiFi,Cameras,Sensors,MX_Model,AP_Model,Switch_Model,Camera_Model,Sensor_Model\r\nHQ,UK,London,400,MPLS,500,DIA,1000,Y,Y,Y,12,6,MX250,MR46,MS250-48FP,MV22,MT14\r\nBranch,UK,Bristol,60,DIA,200,Broadband,80,N,Y,Y,4,2,,,,,\r\n'], { type: 'text/csv' }), 'sites_template.csv'));
   $('siteCsv').addEventListener('change', async (e) => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try {
       const rows = C.parseCsvRows(C.decodeBuffer(await f.arrayBuffer())); const h = rows[0].map((x) => x.toLowerCase().replace(/[^a-z0-9]/g, ''));
       const col = (...n) => h.findIndex((x) => n.includes(x));
-      const ix = { type: col('type', 'sitetype'), country: col('country'), city: col('city', 'site', 'name'), users: col('users', 'headcount'), ha: col('ha'), sw: col('switching', 'lan'), wifi: col('wifi'), cam: col('cameras', 'camera'), sen: col('sensors', 'iot') };
+      const ix = { type: col('type', 'sitetype'), country: col('country'), city: col('city', 'site', 'name'), users: col('users', 'headcount'), ha: col('ha'), sw: col('switching', 'lan'), wifi: col('wifi'), cam: col('cameras', 'camera'), sen: col('sensors', 'iot'), mx: col('mxmodel', 'mx'), ap: col('apmodel', 'ap'), swm: col('switchmodel', 'swmodel'), cm: col('cameramodel', 'cammodel'), sm: col('sensormodel') };
       const out = [];
       for (const r of rows.slice(1)) {
         const g = (i) => (i >= 0 ? (r[i] || '').trim() : ''); const wan = [];
         for (let n = 1; n <= 4; n++) { const a = col(`wan${n}type`), b = col(`wan${n}mbps`, `wan${n}bw`, `wan${n}bandwidth`); if (b >= 0 && C.num(r[b]) > 0) wan.push({ type: g(a), mbps: C.num(r[b]) }); }
-        out.push(App.normSite({ type: g(ix.type), country: g(ix.country), city: g(ix.city), users: g(ix.users), ha: g(ix.ha), switching: ix.sw >= 0 ? g(ix.sw) : null, wifi: ix.wifi >= 0 ? g(ix.wifi) : null, cameras: g(ix.cam), sensors: g(ix.sen), wan }));
+        out.push(App.normSite({ type: g(ix.type), country: g(ix.country), city: g(ix.city), users: g(ix.users), ha: g(ix.ha), switching: ix.sw >= 0 ? g(ix.sw) : null, wifi: ix.wifi >= 0 ? g(ix.wifi) : null, cameras: g(ix.cam), sensors: g(ix.sen), mxModel: g(ix.mx), apModel: g(ix.ap), swModel: g(ix.swm), camModel: g(ix.cm), sensorModel: g(ix.sm), wan }));
       }
       if (!out.length) throw new Error('No site rows found');
       S.sites = out; App.renderSites(); $('importNote').hidden = false; $('importNote').className = 'small ok'; $('importNote').textContent = `Imported ${out.length} site(s).`;
@@ -174,13 +184,14 @@ App.bindRules = function () {
   const bind = (id, fn) => $(id).addEventListener('input', () => fn($(id).value));
   bind('cfgUsersPerAp', (v) => { cfg.usersPerAp = Math.max(1, C.num(v, 30)); }); bind('cfgPortsPerSwitch', (v) => { cfg.portsPerSwitch = Math.max(1, C.num(v, 24)); });
   bind('cfgWired', (v) => { cfg.wiredShare = Math.min(1, Math.max(0, C.num(v, 0.5))); }); $('cfgHaLic').addEventListener('change', () => { cfg.haLicDouble = $('cfgHaLic').value === '1'; });
-  [['dfAp', 'ap'], ['dfSw', 'sw'], ['dfCam', 'cam'], ['dfSensor', 'sensor'], ['dfMxEd', 'mxEd'], ['dfApEd', 'apEd'], ['dfSwEd', 'swEd']].forEach(([id, k]) => { $(id).addEventListener('input', () => { cfg.defaults[k] = $(id).value.trim(); }); $(id).addEventListener('change', () => { cfg.defaults[k] = $(id).value.trim(); }); });
+  [['dfAp', 'ap'], ['dfSw', 'sw'], ['dfCam', 'cam'], ['dfSensor', 'sensor']].forEach(([id, k]) => { $(id).innerHTML = C.MODELS[k].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option>${esc(m)}</option>`).join('')}</optgroup>`).join(''); });
+  [['dfAp', 'ap'], ['dfSw', 'sw'], ['dfCam', 'cam'], ['dfSensor', 'sensor'], ['dfMxEd', 'mxEd'], ['dfApEd', 'apEd'], ['dfSwEd', 'swEd']].forEach(([id, k]) => { $(id).addEventListener('input', () => { cfg.defaults[k] = $(id).value.trim(); }); $(id).addEventListener('change', () => { cfg.defaults[k] = $(id).value.trim(); App.renderSites(); }); });
   $('previewBtn').addEventListener('click', preview);
 };
 function preview() {
   const tb = $('previewBody'); if (!S.sites.length) { tb.innerHTML = '<tr><td colspan="10" class="center muted" style="padding:12px">No sites yet.</td></tr>'; return; }
   const chk = (m) => !S.pb ? '' : C.findHardware(S.pb, m) ? ' <span class="ok" title="Found in price book">✔</span>' : ' <span class="err" title="Not in price book">✖</span>';
-  tb.innerHTML = S.sites.map((s, i) => { const z = C.sizeSite(s); return `<tr><td>${i + 1}</td><td>${esc(C.siteName(s))}</td><td>${esc(s.type)}</td><td>${z.bw} Mbps</td><td><b>${esc(z.mx || '—')}</b>${z.mx ? chk(z.mx) : ''}</td><td>${z.aps}</td><td>${z.switches}</td><td>${z.cameras}</td><td>${z.sensors}</td><td>${s.ha ? 'Y' : '–'}</td></tr>`; }).join('');
+  tb.innerHTML = S.sites.map((s, i) => { const z = C.sizeSite(s); return `<tr><td>${i + 1}</td><td>${esc(C.siteName(s))}</td><td>${esc(s.type)}</td><td>${z.bw} Mbps</td><td><b>${esc(z.mx || '—')}</b>${z.mx ? chk(z.mx) : ''}</td><td>${z.aps ? `${z.aps} × ${esc(z.apModel)}${chk(z.apModel)}` : '–'}</td><td>${z.switches ? `${z.switches} × ${esc(z.swModel)}${chk(z.swModel)}` : '–'}</td><td>${z.cameras ? `${z.cameras} × ${esc(z.camModel)}${chk(z.camModel)}` : '–'}</td><td>${z.sensors ? `${z.sensors} × ${esc(z.sensorModel)}${chk(z.sensorModel)}` : '–'}</td><td>${s.ha ? 'Y' : '–'}</td></tr>`; }).join('');
 }
 App.preview = preview;
 
@@ -281,7 +292,7 @@ App.generateDesign = async function () {
     S.cur = $('cur').value; S.fx = C.num($('fx').value, 1) || 1;
     const company = $('companyName').value.trim() || 'Customer';
     const infra = meraki ? C.buildInfraLines(S.pb, S.sites) : [];
-    const sizing = meraki ? S.sites.map((s) => { const z = C.sizeSite(s); return { site: C.siteName(s), type: s.type, users: s.users, wan: s.wan.map((l) => `${l.type} ${l.mbps}Mbps`), ha: !!s.ha, mx: z.mx, aps: z.aps, switches: z.switches, cameras: z.cameras, sensors: z.sensors }; }) : [];
+    const sizing = meraki ? S.sites.map((s) => { const z = C.sizeSite(s); return { site: C.siteName(s), type: s.type, users: s.users, wan: s.wan.map((l) => `${l.type} ${l.mbps}Mbps`), ha: !!s.ha, mx: z.mx, aps: z.aps, apModel: z.apModel, switches: z.switches, swModel: z.swModel, cameras: z.cameras, camModel: z.camModel, sensors: z.sensors, sensorModel: z.sensorModel }; }) : [];
     let svc = { picks: [], note: '' }, narr = null, narrErr = '';
     const jobs = [];
     if (sse && users > 0) jobs.push(pickSse(users).then((r) => { svc = r; }).catch((e) => { svc = { picks: [], note: 'Secure Access SKU selection failed: ' + e.message }; }));

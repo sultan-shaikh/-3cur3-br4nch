@@ -147,3 +147,6 @@ body.print-proposal #reportSection,body.print-proposal #inputSection{display:non
 }
 @media print{.dwrap{height:auto!important;overflow:visible!important;border:0}.dstage{transform:none!important;padding:0}.dstage svg{max-width:100%!important;height:auto!important}.printcover{display:flex!important;flex-direction:column;justify-content:center;min-height:90vh;break-after:page}.rawcode{display:none!important}}
 .sec table,.sec .bom td{color:var(--s800)}.sec .bom tfoot td{color:var(--s900)}
+
+.frow{display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:nowrap}.frow label{min-width:118px}.msel{width:150px;font-size:11.5px;padding:3px 4px}
+.msel{width:185px}.frow label{min-width:112px}

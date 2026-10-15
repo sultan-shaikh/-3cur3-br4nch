@@ -126,7 +126,7 @@
   <div id="meInputs" class="sep">
     <div class="row wrap" style="margin-bottom:12px"><span class="pillar slate">Pillar 2: Meraki sites</span><span class="small muted">WAN bandwidth sizes the MX · services tick the LAN / WiFi / camera / IoT hardware</span></div>
     <div class="tablewrap"><table class="site-table" id="siteTable">
-      <thead><tr><th>Type</th><th>Country</th><th>City</th><th>Users</th><th>Services</th><th style="min-width:230px">WAN links (type + Mbps)</th><th class="center">HA</th><th></th></tr></thead>
+      <thead><tr><th>Type</th><th>Country</th><th>City</th><th>Users</th><th style="min-width:300px">Services &amp; models</th><th>Firewall (MX)</th><th style="min-width:230px">WAN links (type + Mbps)</th><th class="center">HA</th><th></th></tr></thead>
       <tbody></tbody></table></div>
     <div class="row wrap" style="margin-top:12px">
       <button id="addSite" class="btn blue" type="button">＋ Add new site</button>
@@ -165,13 +165,13 @@
     <button id="ruleAdd" class="linkbtn" type="button" style="margin-top:6px">+ Add custom rule</button>
     <div class="grid g4" style="margin-top:16px">
       <label class="f">Users per access point<input id="cfgUsersPerAp" type="number" min="1"></label>
-      <label class="f">Ports per switch<input id="cfgPortsPerSwitch" type="number" min="1"></label>
+      <label class="f">Ports per switch (only if model is unknown)<input id="cfgPortsPerSwitch" type="number" min="1"></label>
       <label class="f">Share of users on wired ports (0–1)<input id="cfgWired" type="number" min="0" max="1" step="0.05"></label>
       <label class="f">HA: licence both MX units<select id="cfgHaLic"><option value="1">Yes</option><option value="0">No (hardware only)</option></select></label>
-      <label class="f">Access point model<input id="dfAp"></label>
-      <label class="f">Switch model<input id="dfSw"></label>
-      <label class="f">Camera model<input id="dfCam"></label>
-      <label class="f">IoT sensor model<input id="dfSensor"></label>
+      <label class="f">Default access point model<select id="dfAp"></select></label>
+      <label class="f">Default switch model<select id="dfSw"></select></label>
+      <label class="f">Default camera model<select id="dfCam"></select></label>
+      <label class="f">Default sensor model<select id="dfSensor"></select></label>
       <label class="f">MX licence edition<select id="dfMxEd"><option value="adv">Advanced Security</option><option value="ent">Enterprise</option><option value="sdw">SD-WAN Plus</option></select></label>
       <label class="f">AP licence edition<select id="dfApEd"><option value="ent">Enterprise</option><option value="adv">Advanced</option></select></label>
       <label class="f">Switch licence edition<select id="dfSwEd"><option value="ent">Enterprise</option><option value="adv">Advanced</option></select></label>
