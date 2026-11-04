@@ -9,14 +9,16 @@ const CONFIG = {
   wiredShare: 0.5,            // share of users needing a wired port
   haLicDouble: true,          // HA pair: licence on both MX units
   // WAN bandwidth (sum of a site's links, Mbps) -> MX model. First rule with bw <= upTo wins per scope.
+  // Tiers by total site WAN bandwidth (Mbps). First matching rule per scope sets the MX and the default LAN/WiFi/camera/sensor models.
+  // A blank model falls back to the global defaults below. A model chosen on a site always wins.
   rules: [
-    { scope: 'branch', upTo: 200, model: 'MX67' },
-    { scope: 'branch', upTo: 500, model: 'MX85' },
-    { scope: 'branch', upTo: 1000, model: 'MX95' },
-    { scope: 'branch', upTo: 2000, model: 'MX105' },
-    { scope: 'branch', upTo: 1e9, model: 'MX250' },
-    { scope: 'hub', upTo: 4000, model: 'MX250' },
-    { scope: 'hub', upTo: 1e9, model: 'MX450' },
+    { scope: 'branch', upTo: 200, model: 'MX67', sw: 'MS130-24P', ap: 'MR36', cam: 'MV12W', sensor: 'MT10' },
+    { scope: 'branch', upTo: 500, model: 'MX85', sw: 'MS130-48P', ap: 'MR44', cam: 'MV22', sensor: 'MT10' },
+    { scope: 'branch', upTo: 1000, model: 'MX95', sw: 'MS225-48FP', ap: 'MR46', cam: 'MV22', sensor: 'MT14' },
+    { scope: 'branch', upTo: 2000, model: 'MX105', sw: 'MS250-48FP', ap: 'MR46', cam: 'MV32', sensor: 'MT14' },
+    { scope: 'branch', upTo: 1e9, model: 'MX250', sw: 'MS350-48FP', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
+    { scope: 'hub', upTo: 4000, model: 'MX250', sw: 'MS350-48FP', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
+    { scope: 'hub', upTo: 1e9, model: 'MX450', sw: 'MS355-48X', ap: 'MR57', cam: 'MV63', sensor: 'MT15' },
   ],
   defaults: { ap: 'MR36', sw: 'MS130-24P', cam: 'MV12W', sensor: 'MT10', mxEd: 'adv', apEd: 'ent', swEd: 'ent' },
   derive: { y3: 0.30, y5: 0.50 }, // discounts vs N x 1Y, only when the derive toggle is on
@@ -232,12 +234,17 @@ function siteBw(site) {
   return num(site.bwMbps) || parseBwMbps(site.bw);
 }
 
-function mxModelFor(bw, type, rules) {
+function ruleFor(bw, type, rules) {
   rules = rules || CONFIG.rules;
   const scope = isHub(type) ? 'hub' : 'branch';
   const list = rules.filter((r) => r.scope === scope || r.scope === 'any').sort((a, b) => num(a.upTo) - num(b.upTo));
-  const hit = list.find((r) => bw <= num(r.upTo)) || list[list.length - 1];
-  return hit ? hit.model : '';
+  return list.find((r) => bw <= num(r.upTo)) || list[list.length - 1] || null;
+}
+function mxModelFor(bw, type, rules) { const r = ruleFor(bw, type, rules); return r ? r.model : ''; }
+/* Sensible starting counts for a site that has just had cameras / sensors switched on. */
+function suggestCounts(site) {
+  const u = num(site.users), hub = isHub(site.type);
+  return { cameras: Math.max(hub ? 8 : 2, Math.ceil(u / 10)), sensors: Math.max(hub ? 6 : 2, Math.ceil(u / 15)) };
 }
 
 /* Pure sizing of one site from the rules. Independent of the price book. */
@@ -246,15 +253,16 @@ function sizeSite(site, cfg) {
   const users = num(site.users), cloud = isCloudSite(site.type);
   if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, hubSite: false, cloud: true };
   const bw = siteBw(site);
-  const apModel = (site.apModel || '').trim() || d.ap, swModel = (site.swModel || '').trim() || d.sw;
-  const camModel = (site.camModel || '').trim() || d.cam, sensorModel = (site.sensorModel || '').trim() || d.sensor;
+  const rule = ruleFor(bw, site.type, cfg.rules) || {};
+  const apModel = (site.apModel || '').trim() || rule.ap || d.ap, swModel = (site.swModel || '').trim() || rule.sw || d.sw;
+  const camModel = (site.camModel || '').trim() || rule.cam || d.cam, sensorModel = (site.sensorModel || '').trim() || rule.sensor || d.sensor;
   const aps = site.wifi ? Math.ceil(users / cfg.usersPerAp) : 0;
   const cameras = site.camera ? num(site.cameras) : 0;
   const sensors = site.iot ? num(site.sensors) : 0;
   const ports = site.switching ? Math.ceil(users * cfg.wiredShare) + aps + cameras : 0;
   const swPorts = switchPorts(swModel) || cfg.portsPerSwitch;
   const switches = site.switching && ports > 0 ? Math.ceil(ports / swPorts) : 0;
-  const mx = (site.mxOverride || '').trim() || mxModelFor(bw, site.type, cfg.rules);
+  const mx = (site.mxOverride || '').trim() || (rule.model || '');
   return { bw, mx, aps, switches, cameras, sensors, ports, swPorts, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
 }
 const siteName = (s) => [s.city, s.country].filter(Boolean).join(', ') || s.name || 'Site';
@@ -346,6 +354,6 @@ function bomToCsv(lines, derive) {
   return rows.join('\r\n');
 }
 
-const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
+const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, ruleFor, suggestCounts, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

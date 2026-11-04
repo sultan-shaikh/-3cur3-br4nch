@@ -97,27 +97,32 @@ function knownModel(kind, v) { v = String(v || '').trim().toUpperCase(); return 
 function bool(v) { return v === true || /^(y|yes|true|1|x)$/i.test(String(v)); }
 
 
-function modelOpts(kind, cur, defLabel) {
-  const d = C.CONFIG.defaults;
-  return `<option value="">${esc(defLabel)}</option>` + C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('');
+const autoOf = (s) => C.sizeSite({ ...s, mxOverride: '', apModel: '', swModel: '', camModel: '', sensorModel: '' });
+function modelOpts(kind, cur, autoLabel) {
+  return `<option value="">${esc(autoLabel)}</option>` + C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('');
 }
-const modelSel = (kind, key, s, def) => `<select class="msel" data-k="${key}" title="Model for this site">${modelOpts(kind, s[key] || '', 'Default (' + def + ')')}</select>`;
+function modelsCell(s) {
+  if (C.isCloudSite(s.type)) return '<span class="tiny muted">–</span>';
+  const a = autoOf(s);
+  const f = (lbl, kind, key, auto) => `<label class="mf"><span>${lbl}</span><select data-k="${key}" title="Auto = chosen by this site's bandwidth tier. Pick a model to override.">${modelOpts(kind, s[key] || '', 'Auto · ' + auto)}</select></label>`;
+  return `<div class="mgrid">${f('MX', 'mx', 'mxOverride', a.mx)}${s.switching ? f('Switch', 'sw', 'swModel', a.swModel) : ''}${s.wifi ? f('AP', 'ap', 'apModel', a.apModel) : ''}${s.camera ? f('Camera', 'cam', 'camModel', a.camModel) : ''}${s.iot ? f('Sensor', 'sensor', 'sensorModel', a.sensorModel) : ''}</div>`;
+}
+const TCLS = { HQ: 'hq', DC: 'dc', Branch: 'br' };
 App.renderSites = function () {
-  const D = C.CONFIG.defaults;
   const tb = $('siteTable').tBodies[0];
   tb.innerHTML = S.sites.map((s, i) => `<tr data-i="${i}">
-    <td><select data-k="type">${SITE_TYPES.map((t) => `<option${t === s.type ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
-    <td><input data-k="country" value="${esc(s.country)}" style="width:90px"></td>
-    <td><input data-k="city" value="${esc(s.city)}" style="width:110px"></td>
+    <td><select data-k="type" class="typesel ${TCLS[s.type] || 'br'}">${SITE_TYPES.map((t) => `<option${t === s.type ? ' selected' : ''}>${t}</option>`).join('')}</select></td>
+    <td><input data-k="country" value="${esc(s.country)}" style="width:80px"></td>
+    <td><input data-k="city" value="${esc(s.city)}" style="width:120px"></td>
     <td><input data-k="users" type="number" min="0" class="num-in" value="${esc(s.users)}"></td>
-    <td><div class="feat">
-      <div class="frow"><label><input type="checkbox" data-k="switching"${s.switching ? ' checked' : ''}> LAN switching</label>${s.switching ? modelSel('sw', 'swModel', s, D.sw) : ''}</div>
-      <div class="frow"><label><input type="checkbox" data-k="wifi"${s.wifi ? ' checked' : ''}> WiFi</label>${s.wifi ? modelSel('ap', 'apModel', s, D.ap) : ''}</div>
-      <div class="frow"><label><input type="checkbox" data-k="camera"${s.camera ? ' checked' : ''}> Cameras ${s.camera ? `<input type="number" min="0" data-k="cameras" value="${esc(s.cameras)}">` : ''}</label>${s.camera ? modelSel('cam', 'camModel', s, D.cam) : ''}</div>
-      <div class="frow"><label><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}> IoT sensors ${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label>${s.iot ? modelSel('sensor', 'sensorModel', s, D.sensor) : ''}</div></div></td>
-    <td>${C.isCloudSite(s.type) ? '' : `<select class="msel" data-k="mxOverride" title="Firewall / SD-WAN appliance">${modelOpts('mx', s.mxOverride || '', 'Auto (by bandwidth)')}</select>`}</td>
     <td>${s.wan.map((l, j) => `<div class="wanrow"><select data-k="wantype" data-l="${j}">${WAN_TYPES.map((t) => `<option${t === l.type ? ' selected' : ''}>${t}</option>`).join('')}</select><input type="number" min="0" data-k="wanmbps" data-l="${j}" value="${esc(l.mbps)}"><span class="tiny muted">Mbps</span>${s.wan.length > 1 ? `<button class="x" type="button" data-act="rmwan" data-l="${j}" title="Remove link">✕</button>` : ''}</div>`).join('')}<button class="linkbtn" type="button" data-act="addwan">+ link</button></td>
-    <td class="center"><input type="checkbox" data-k="ha"${s.ha ? ' checked' : ''}></td>
+    <td class="center"><input type="checkbox" data-k="ha"${s.ha ? ' checked' : ''} title="High-availability MX pair"></td>
+    <td><div class="chips2">
+      <label class="chip${s.switching ? ' on' : ''}"><input type="checkbox" data-k="switching"${s.switching ? ' checked' : ''}>LAN</label>
+      <label class="chip${s.wifi ? ' on' : ''}"><input type="checkbox" data-k="wifi"${s.wifi ? ' checked' : ''}>WiFi</label>
+      <label class="chip${s.camera ? ' on' : ''}"><input type="checkbox" data-k="camera"${s.camera ? ' checked' : ''}>Cameras${s.camera ? `<input type="number" min="0" data-k="cameras" value="${esc(s.cameras)}">` : ''}</label>
+      <label class="chip${s.iot ? ' on' : ''}"><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}>IoT${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label></div></td>
+    <td class="mcell">${modelsCell(s)}</td>
     <td><button class="x" type="button" data-act="del" title="Remove site">✕</button></td></tr>`).join('');
 };
 function siteEvent(e) {
@@ -132,9 +137,11 @@ function siteEvent(e) {
   const k = t.dataset.k; if (!k) return;
   if (k === 'wantype') s.wan[+t.dataset.l].type = t.value;
   else if (k === 'wanmbps') s.wan[+t.dataset.l].mbps = C.num(t.value);
-  else if (t.type === 'checkbox') { s[k] = t.checked; if (e.type === 'change') { if (t.checked && (k === 'camera' || k === 'iot') && !s[k === 'camera' ? 'cameras' : 'sensors']) s[k === 'camera' ? 'cameras' : 'sensors'] = 2; if (['camera', 'iot', 'switching', 'wifi'].includes(k)) App.renderSites(); } }
+  else if (t.type === 'checkbox') { s[k] = t.checked; if (e.type === 'change') { if (t.checked && (k === 'camera' || k === 'iot') && !s[k === 'camera' ? 'cameras' : 'sensors']) s[k === 'camera' ? 'cameras' : 'sensors'] = C.suggestCounts(s)[k === 'camera' ? 'cameras' : 'sensors']; if (['camera', 'iot', 'switching', 'wifi'].includes(k)) App.renderSites(); } }
   else if (t.type === 'number') s[k] = C.num(t.value);
   else s[k] = t.value;
+  if (k === 'type') t.className = 'typesel ' + (TCLS[t.value] || 'br');
+  const mc = tr.querySelector('.mcell'); if (mc && !t.closest('.mcell')) mc.innerHTML = modelsCell(s);
 }
 App.bindSites = function () {
   ['input', 'change', 'click'].forEach((ev) => $('siteTable').tBodies[0].addEventListener(ev, siteEvent));
@@ -169,17 +176,19 @@ App.activeAddons = () => [...document.querySelectorAll('#addonGrid input:checked
 App.renderRules = function (reset) {
   const cfg = C.CONFIG;
   if (reset) { cfg.rules = JSON.parse(JSON.stringify(C.DEFAULT_RULES)); Object.assign(cfg.defaults, JSON.parse(JSON.stringify(C.DEFAULT_DEFAULTS))); cfg.usersPerAp = 30; cfg.portsPerSwitch = 24; cfg.wiredShare = 0.5; cfg.haLicDouble = true; }
+  const rsel = (kind, key, r, blank) => `<select data-k="${key}"><option value="">${blank}</option>${C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === r[key] ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('')}</select>`;
   $('rulesBody').innerHTML = cfg.rules.map((r, i) => `<tr data-i="${i}"><td><select data-k="scope"><option value="branch"${r.scope === 'branch' ? ' selected' : ''}>Branch</option><option value="hub"${r.scope === 'hub' ? ' selected' : ''}>Hub (DC / HQ)</option><option value="any"${r.scope === 'any' ? ' selected' : ''}>Any</option></select></td>
-    <td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:120px"></td><td><input data-k="model" value="${esc(r.model)}" style="width:140px"></td><td><button class="x" type="button" data-act="rdel">✕</button></td></tr>`).join('');
+    <td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:100px"></td><td>${rsel('mx', 'model', r, '— none —')}</td><td>${rsel('sw', 'sw', r, '— default —')}</td><td>${rsel('ap', 'ap', r, '— default —')}</td><td>${rsel('cam', 'cam', r, '— default —')}</td><td>${rsel('sensor', 'sensor', r, '— default —')}</td><td><button class="x" type="button" data-act="rdel">✕</button></td></tr>`).join('');
+  if (App.renderSites) App.renderSites();
   $('cfgUsersPerAp').value = cfg.usersPerAp; $('cfgPortsPerSwitch').value = cfg.portsPerSwitch; $('cfgWired').value = cfg.wiredShare; $('cfgHaLic').value = cfg.haLicDouble ? '1' : '0';
   const d = cfg.defaults; $('dfAp').value = d.ap; $('dfSw').value = d.sw; $('dfCam').value = d.cam; $('dfSensor').value = d.sensor; $('dfMxEd').value = d.mxEd; $('dfApEd').value = d.apEd; $('dfSwEd').value = d.swEd;
 };
 App.bindRules = function () {
   const cfg = C.CONFIG;
   const rb = $('rulesBody');
-  rb.addEventListener('input', (e) => { const tr = e.target.closest('tr'), r = cfg.rules[+tr.dataset.i], k = e.target.dataset.k; if (!r || !k) return; r[k] = k === 'upTo' ? (e.target.value === '' ? 1e9 : C.num(e.target.value)) : e.target.value; });
+  rb.addEventListener('input', (e) => { const tr = e.target.closest('tr'), r = cfg.rules[+tr.dataset.i], k = e.target.dataset.k; if (!r || !k) return; r[k] = k === 'upTo' ? (e.target.value === '' ? 1e9 : C.num(e.target.value)) : e.target.value; App.renderSites(); });
   rb.addEventListener('click', (e) => { if (e.target.dataset.act === 'rdel') { cfg.rules.splice(+e.target.closest('tr').dataset.i, 1); App.renderRules(); } });
-  $('ruleAdd').addEventListener('click', () => { cfg.rules.push({ scope: 'branch', upTo: 1e9, model: '' }); App.renderRules(); });
+  $('ruleAdd').addEventListener('click', () => { cfg.rules.push({ scope: 'branch', upTo: 1e9, model: '', sw: '', ap: '', cam: '', sensor: '' }); App.renderRules(); });
   $('rulesReset').addEventListener('click', () => App.renderRules(true));
   const bind = (id, fn) => $(id).addEventListener('input', () => fn($(id).value));
   bind('cfgUsersPerAp', (v) => { cfg.usersPerAp = Math.max(1, C.num(v, 30)); }); bind('cfgPortsPerSwitch', (v) => { cfg.portsPerSwitch = Math.max(1, C.num(v, 24)); });
