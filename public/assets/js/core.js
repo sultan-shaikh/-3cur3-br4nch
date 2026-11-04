@@ -20,6 +20,8 @@ const CONFIG = {
     { scope: 'hub', upTo: 4000, model: 'MX250', sw: '', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
     { scope: 'hub', upTo: 1e9, model: 'MX450', sw: '', ap: 'MR57', cam: 'MV63', sensor: 'MT15' },
   ],
+  concentration: 0.5,        // share of the branches' combined bandwidth a hub MX must carry (hub-and-spoke VPN concentration)
+  hubMaxMbps: 5000,          // above this aggregate load, flag that another hub / DC is needed (assumption - check vendor VPN throughput)
   stackAbovePorts: 48,        // a branch needing more access ports than this auto-selects an N+1 stack
   core: { HQ: 'MS425-16', DC: 'MS425-32' }, // aggregation switch pair used at hubs with a redundant LAN
   // Access-switch ladder by ports needed. 'resilient' rows are stack-capable models (used for N+1 stacks and pairs).
@@ -263,6 +265,28 @@ function suggestCounts(site) {
 }
 
 /* Pure sizing of one site from the rules. Independent of the price book. */
+/* Hub aggregation: assign every branch to a hub (DC / HQ) and compute each hub's aggregate load.
+   Sets transient fields on the site objects: id, _hubId, _hubName, _branches, _branchBw, _aggBw. Safe to call repeatedly. */
+let _sid = 0;
+function annotate(sites, cfg) {
+  cfg = cfg || CONFIG; sites = sites || [];
+  for (const s of sites) { if (!s.id) s.id = 's' + Date.now().toString(36) + (++_sid); s._hubId = ''; s._hubName = ''; s._branches = 0; s._branchBw = 0; s._aggBw = 0; }
+  const live = sites.filter((s) => !isCloudSite(s.type)), hubs = live.filter((s) => isHub(s.type)), spokes = live.filter((s) => !isHub(s.type));
+  const sameCountry = (a, b) => String(a.country || '').trim().toLowerCase() === String(b.country || '').trim().toLowerCase();
+  const byCity = (c) => hubs.find((h) => c && String(h.city || '').trim().toLowerCase() === String(c).trim().toLowerCase());
+  for (const b of [...spokes].sort((x, y) => siteBw(y) - siteBw(x))) {
+    let hub = hubs.find((h) => h.id === b.homeTo) || byCity(b.homeToCity);
+    if (!hub && hubs.length) {
+      let c = hubs.filter((h) => sameCountry(h, b)); if (!c.length) c = hubs;
+      const dcs = c.filter((h) => h.type === 'DC'); if (dcs.length) c = dcs;
+      hub = c.reduce((best, h) => (h._branchBw < best._branchBw ? h : best), c[0]);
+    }
+    if (hub) { b._hubId = hub.id; b._hubName = siteName(hub); hub._branches++; hub._branchBw += siteBw(b); }
+  }
+  for (const h of hubs) h._aggBw = Math.round(h._branchBw * num(cfg.concentration, 0.5));
+  return sites;
+}
+
 /* Meraki physical-stack capable families (per Meraki "Stacking Choices"). MS120/125/130 and C9200L cannot stack. */
 const canStack = (m) => /^(MS150|MS210|MS225|MS250|MS350|MS355|MS390|MS410|MS425|MS450|C9300)/i.test(String(m || ''));
 function ladderModel(ports, scope, kind, ladder) {
@@ -284,7 +308,8 @@ function sizeSite(site, cfg) {
   const users = num(site.users), cloud = isCloudSite(site.type);
   if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, res: 'none', coreQty: 0, hubSite: false, cloud: true };
   const bw = siteBw(site);
-  const rule = ruleFor(bw, site.type, cfg.rules) || {};
+  const effBw = isHub(site.type) ? Math.max(bw, num(site._aggBw)) : bw; // hubs are sized for the branches they serve
+  const rule = ruleFor(effBw, site.type, cfg.rules) || {};
   const aps = site.wifi ? Math.max(1, Math.ceil(users / cfg.usersPerAp)) : 0; // WiFi ticked = at least 1 AP
   const cameras = site.camera ? num(site.cameras) : 0;
   const sensors = site.iot ? num(site.sensors) : 0;
@@ -300,12 +325,13 @@ function sizeSite(site, cfg) {
   const coreModel = site.switching && res === 'pair' && isHub(site.type) ? ((cfg.core || {})[site.type === 'DC' ? 'DC' : 'HQ'] || '') : '';
   const coreQty = coreModel ? 2 : 0;
   const mx = (site.mxOverride || '').trim() || (rule.model || '');
-  return { bw, mx, aps, switches, swBase, cameras, sensors, ports, swPorts, res, coreModel, coreQty, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
+  return { bw, effBw, aggBw: num(site._aggBw), branches: num(site._branches), hubName: site._hubName || '', mx, aps, switches, swBase, cameras, sensors, ports, swPorts, res, coreModel, coreQty, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
 }
 /* Plain-English warnings about a site's inputs, shown in the preview and under the sites table. */
 function siteNotes(site, cfg) {
   if (isCloudSite(site.type)) return [];
   const z = sizeSite(site, cfg), n = [];
+  if (isHub(site.type) && z.effBw > num((cfg || CONFIG).hubMaxMbps)) n.push(`Hub load ${z.effBw} Mbps (${z.branches} branches) exceeds ${num((cfg || CONFIG).hubMaxMbps)} Mbps: consider an additional hub / DC`);
   if (z.res === 'stack' && !canStack(z.swModel)) n.push(`${z.swModel} cannot physically stack, so the N+1 spare would be a standalone switch. Choose a stack-capable model (MS150/210/225/250/350/355/390/410/425/450, C9300-M)`);
   if (z.res === 'stack' && z.swBase + 1 > 8) n.push('A physical stack holds at most 8 switches; split this site into more than one stack');
   if (site.type !== 'DC' && num(site.users) === 0 && !(num(site.wiredPorts) > 0) && (site.wifi || site.switching)) n.push('Users = 0: set a user count (APs and switches are sized at the minimum of 1)');
@@ -323,7 +349,7 @@ function mkLine(group, site, kind, e, qty, desc, note) {
 const gap = (group, site, requirement, qty) => ({ group, site, kind: 'gap', verified: false, requirement, qty });
 
 function buildInfraLines(pb, sites, cfg) {
-  cfg = cfg || CONFIG; const d = cfg.defaults; const lines = [];
+  cfg = cfg || CONFIG; annotate(sites, cfg); const d = cfg.defaults; const lines = [];
   for (const s of sites) {
     const z = sizeSite(s, cfg); if (z.cloud) continue;
     const name = `${siteName(s)} (${s.type})`; const ha = !!s.ha;
@@ -404,6 +430,6 @@ function bomToCsv(lines, derive) {
   return rows.join('\r\n');
 }
 
-const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, siteNotes, canStack, ladderModel, lanTag, RES_LABEL, DEFAULT_LADDER, DEFAULT_CORE, ruleFor, suggestCounts, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
+const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, annotate, siteNotes, canStack, ladderModel, lanTag, RES_LABEL, DEFAULT_LADDER, DEFAULT_CORE, ruleFor, suggestCounts, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);
