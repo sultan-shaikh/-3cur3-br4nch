@@ -12,18 +12,33 @@ const CONFIG = {
   // Tiers by total site WAN bandwidth (Mbps). First matching rule per scope sets the MX and the default LAN/WiFi/camera/sensor models.
   // A blank model falls back to the global defaults below. A model chosen on a site always wins.
   rules: [
-    { scope: 'branch', upTo: 200, model: 'MX67', sw: 'MS130-24P', ap: 'MR36', cam: 'MV12W', sensor: 'MT10' },
-    { scope: 'branch', upTo: 500, model: 'MX85', sw: 'MS130-48P', ap: 'MR44', cam: 'MV22', sensor: 'MT10' },
-    { scope: 'branch', upTo: 1000, model: 'MX95', sw: 'MS225-48FP', ap: 'MR46', cam: 'MV22', sensor: 'MT14' },
-    { scope: 'branch', upTo: 2000, model: 'MX105', sw: 'MS250-48FP', ap: 'MR46', cam: 'MV32', sensor: 'MT14' },
-    { scope: 'branch', upTo: 1e9, model: 'MX250', sw: 'MS350-48FP', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
-    { scope: 'hub', upTo: 4000, model: 'MX250', sw: 'MS350-48FP', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
-    { scope: 'hub', upTo: 1e9, model: 'MX450', sw: 'MS355-48X', ap: 'MR57', cam: 'MV63', sensor: 'MT15' },
+    { scope: 'branch', upTo: 200, model: 'MX67', sw: '', ap: 'MR36', cam: 'MV12W', sensor: 'MT10' },
+    { scope: 'branch', upTo: 500, model: 'MX85', sw: '', ap: 'MR44', cam: 'MV22', sensor: 'MT10' },
+    { scope: 'branch', upTo: 1000, model: 'MX95', sw: '', ap: 'MR46', cam: 'MV22', sensor: 'MT14' },
+    { scope: 'branch', upTo: 2000, model: 'MX105', sw: '', ap: 'MR46', cam: 'MV32', sensor: 'MT14' },
+    { scope: 'branch', upTo: 1e9, model: 'MX250', sw: '', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
+    { scope: 'hub', upTo: 4000, model: 'MX250', sw: '', ap: 'MR57', cam: 'MV52', sensor: 'MT15' },
+    { scope: 'hub', upTo: 1e9, model: 'MX450', sw: '', ap: 'MR57', cam: 'MV63', sensor: 'MT15' },
+  ],
+  stackAbovePorts: 48,        // a branch needing more access ports than this auto-selects an N+1 stack
+  core: { HQ: 'MS425-16', DC: 'MS425-32' }, // aggregation switch pair used at hubs with a redundant LAN
+  // Access-switch ladder by ports needed. 'resilient' rows are stack-capable models (used for N+1 stacks and pairs).
+  swLadder: [
+    { scope: 'branch', kind: 'standalone', upTo: 8, model: 'MS130-8P' },
+    { scope: 'branch', kind: 'standalone', upTo: 24, model: 'MS130-24P' },
+    { scope: 'branch', kind: 'standalone', upTo: 1e9, model: 'MS130-48P' },
+    { scope: 'branch', kind: 'resilient', upTo: 24, model: 'MS210-24P' },
+    { scope: 'branch', kind: 'resilient', upTo: 1e9, model: 'MS210-48FP' },
+    { scope: 'hub', kind: 'standalone', upTo: 24, model: 'MS250-24P' },
+    { scope: 'hub', kind: 'standalone', upTo: 1e9, model: 'MS250-48FP' },
+    { scope: 'hub', kind: 'resilient', upTo: 24, model: 'MS250-24P' },
+    { scope: 'hub', kind: 'resilient', upTo: 1e9, model: 'MS250-48FP' },
   ],
   defaults: { ap: 'MR36', sw: 'MS130-24P', cam: 'MV12W', sensor: 'MT10', mxEd: 'adv', apEd: 'ent', swEd: 'ent' },
   derive: { y3: 0.30, y5: 0.50 }, // discounts vs N x 1Y, only when the derive toggle is on
 };
 const DEFAULT_RULES = JSON.parse(JSON.stringify(CONFIG.rules));
+const DEFAULT_LADDER = JSON.parse(JSON.stringify(CONFIG.swLadder)), DEFAULT_CORE = JSON.parse(JSON.stringify(CONFIG.core));
 const DEFAULT_DEFAULTS = JSON.parse(JSON.stringify(CONFIG.defaults));
 
 
@@ -248,22 +263,56 @@ function suggestCounts(site) {
 }
 
 /* Pure sizing of one site from the rules. Independent of the price book. */
+/* Meraki physical-stack capable families (per Meraki "Stacking Choices"). MS120/125/130 and C9200L cannot stack. */
+const canStack = (m) => /^(MS150|MS210|MS225|MS250|MS350|MS355|MS390|MS410|MS425|MS450|C9300)/i.test(String(m || ''));
+function ladderModel(ports, scope, kind, ladder) {
+  const rows = (ladder || CONFIG.swLadder).filter((r) => r.scope === scope && r.kind === kind).sort((a, b) => num(a.upTo) - num(b.upTo));
+  const hit = rows.find((r) => ports <= num(r.upTo)) || rows[rows.length - 1];
+  return hit ? hit.model : '';
+}
+const RES_LABEL = { none: 'None', stack: 'N+1 stack', pair: 'Redundant pair' };
+function resolveRes(site, ports, cfg) {
+  const r = String(site.lanRes || '').toLowerCase();
+  if (r === 'none' || r === 'stack' || r === 'pair') return r;
+  return isHub(site.type) ? 'pair' : ports > num(cfg.stackAbovePorts, 48) ? 'stack' : 'none';
+}
+const lanTag = (z) => (z.res === 'stack' ? ' (N+1 stack)' : z.res === 'pair' ? ' (redundant pair)' : '');
+
+/* Pure sizing of one site from the rules. Independent of the price book. */
 function sizeSite(site, cfg) {
   cfg = cfg || CONFIG; const d = cfg.defaults;
   const users = num(site.users), cloud = isCloudSite(site.type);
-  if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, hubSite: false, cloud: true };
+  if (cloud) return { bw: 0, mx: '', aps: 0, switches: 0, cameras: 0, sensors: 0, ports: 0, res: 'none', coreQty: 0, hubSite: false, cloud: true };
   const bw = siteBw(site);
   const rule = ruleFor(bw, site.type, cfg.rules) || {};
-  const apModel = (site.apModel || '').trim() || rule.ap || d.ap, swModel = (site.swModel || '').trim() || rule.sw || d.sw;
-  const camModel = (site.camModel || '').trim() || rule.cam || d.cam, sensorModel = (site.sensorModel || '').trim() || rule.sensor || d.sensor;
-  const aps = site.wifi ? Math.ceil(users / cfg.usersPerAp) : 0;
+  const aps = site.wifi ? Math.max(1, Math.ceil(users / cfg.usersPerAp)) : 0; // WiFi ticked = at least 1 AP
   const cameras = site.camera ? num(site.cameras) : 0;
   const sensors = site.iot ? num(site.sensors) : 0;
-  const ports = site.switching ? Math.ceil(users * cfg.wiredShare) + aps + cameras : 0;
+  const ports = !site.switching ? 0 : num(site.wiredPorts) > 0 ? Math.ceil(num(site.wiredPorts)) : Math.ceil(users * cfg.wiredShare) + aps + cameras;
+  const res = site.switching ? resolveRes(site, ports, cfg) : 'none';
+  const scope = isHub(site.type) ? 'hub' : 'branch';
+  const apModel = (site.apModel || '').trim() || rule.ap || d.ap;
+  const swModel = (site.swModel || '').trim() || rule.sw || ladderModel(ports, scope, res === 'none' ? 'standalone' : 'resilient', cfg.swLadder) || d.sw;
+  const camModel = (site.camModel || '').trim() || rule.cam || d.cam, sensorModel = (site.sensorModel || '').trim() || rule.sensor || d.sensor;
   const swPorts = switchPorts(swModel) || cfg.portsPerSwitch;
-  const switches = site.switching && ports > 0 ? Math.ceil(ports / swPorts) : 0;
+  const swBase = site.switching ? Math.max(1, Math.ceil(ports / swPorts)) : 0; // LAN ticked = at least 1 switch
+  const switches = res === 'pair' ? swBase * 2 : res === 'stack' ? swBase + 1 : swBase;
+  const coreModel = site.switching && res === 'pair' && isHub(site.type) ? ((cfg.core || {})[site.type === 'DC' ? 'DC' : 'HQ'] || '') : '';
+  const coreQty = coreModel ? 2 : 0;
   const mx = (site.mxOverride || '').trim() || (rule.model || '');
-  return { bw, mx, aps, switches, cameras, sensors, ports, swPorts, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
+  return { bw, mx, aps, switches, swBase, cameras, sensors, ports, swPorts, res, coreModel, coreQty, apModel, swModel, camModel, sensorModel, hubSite: isHub(site.type), cloud: false };
+}
+/* Plain-English warnings about a site's inputs, shown in the preview and under the sites table. */
+function siteNotes(site, cfg) {
+  if (isCloudSite(site.type)) return [];
+  const z = sizeSite(site, cfg), n = [];
+  if (z.res === 'stack' && !canStack(z.swModel)) n.push(`${z.swModel} cannot physically stack, so the N+1 spare would be a standalone switch. Choose a stack-capable model (MS150/210/225/250/350/355/390/410/425/450, C9300-M)`);
+  if (z.res === 'stack' && z.swBase + 1 > 8) n.push('A physical stack holds at most 8 switches; split this site into more than one stack');
+  if (site.type !== 'DC' && num(site.users) === 0 && !(num(site.wiredPorts) > 0) && (site.wifi || site.switching)) n.push('Users = 0: set a user count (APs and switches are sized at the minimum of 1)');
+  if (!site.switching && (z.aps > 0 || z.cameras > 0)) n.push('LAN switching is off, so APs and cameras have no PoE switch ports in the BoM');
+  if (site.camera && num(site.cameras) === 0) n.push('Cameras ticked but count is 0');
+  if (site.iot && num(site.sensors) === 0) n.push('IoT ticked but sensor count is 0');
+  return n;
 }
 const siteName = (s) => [s.city, s.country].filter(Boolean).join(', ') || s.name || 'Site';
 
@@ -291,6 +340,7 @@ function buildInfraLines(pb, sites, cfg) {
     };
     add('WiFi', z.aps, z.apModel, 'mr', d.apEd, 'access point', false);
     add('LAN', z.switches, z.swModel, switchFamily(z.swModel), d.swEd, 'switch', true);
+    if (z.coreQty) add('LAN', z.coreQty, z.coreModel, switchFamily(z.coreModel), d.swEd, 'aggregation switch', true);
     add('Camera', z.cameras, z.camModel, 'mv', '', 'camera', false);
     add('IoT', z.sensors, z.sensorModel, 'mt', '', 'sensor', false);
   }
@@ -354,6 +404,6 @@ function bomToCsv(lines, derive) {
   return rows.join('\r\n');
 }
 
-const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, ruleFor, suggestCounts, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
+const api = { MODELS, switchPorts, switchFamily, CONFIG, CATALOGUE, esc, num, parseBwMbps, decodeBuffer, parseCsvRows, parsePrice, mapHeader, splitTerm, classifySingle, parsePriceBook, lookupExact, findHardware, findLicence, siteBw, sizeSite, siteName, isHub, isCloudSite, DEFAULT_RULES, DEFAULT_DEFAULTS, mxModelFor, siteNotes, canStack, ladderModel, lanTag, RES_LABEL, DEFAULT_LADDER, DEFAULT_CORE, ruleFor, suggestCounts, buildInfraLines, serviceCandidates, aggregateLines, termPrice, computeTotals, bomToCsv };
 if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Core = api;
 })(typeof window !== 'undefined' ? window : globalThis);

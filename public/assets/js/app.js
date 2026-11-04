@@ -91,13 +91,14 @@ App.normSite = function (r) {
   const cams = C.num(r.cameras), sens = C.num(r.sensors);
   return { type: normType(r.type), country: String(r.country || '').slice(0, 40), city: String(r.city || r.name || '').slice(0, 60), users: C.num(r.users), wan: wan.length ? wan : [{ type: 'DIA', mbps: 100 }], ha: r.ha === true || /^(y|yes|true|1)$/i.test(String(r.ha)),
     switching: r.switching == null ? true : bool(r.switching), wifi: r.wifi == null ? true : bool(r.wifi), camera: bool(r.camera) || cams > 0, cameras: cams, iot: bool(r.iot) || sens > 0, sensors: sens,
+    lanRes: /^(none|stack|pair)$/i.test(String(r.lanRes || '')) ? String(r.lanRes).toLowerCase() : '', wiredPorts: C.num(r.wiredPorts),
     mxOverride: knownModel('mx', r.mxOverride || r.mxModel), apModel: knownModel('ap', r.apModel), swModel: knownModel('sw', r.swModel), camModel: knownModel('cam', r.camModel), sensorModel: knownModel('sensor', r.sensorModel) };
 };
 function knownModel(kind, v) { v = String(v || '').trim().toUpperCase(); return v && C.MODELS[kind].some((g) => g.ids.includes(v)) ? v : ''; }
 function bool(v) { return v === true || /^(y|yes|true|1|x)$/i.test(String(v)); }
 
 
-const autoOf = (s) => C.sizeSite({ ...s, mxOverride: '', apModel: '', swModel: '', camModel: '', sensorModel: '' });
+const autoOf = (s) => C.sizeSite({ ...s, mxOverride: '', apModel: '', swModel: '', camModel: '', sensorModel: '', lanRes: '' });
 function modelOpts(kind, cur, autoLabel) {
   return `<option value="">${esc(autoLabel)}</option>` + C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('');
 }
@@ -105,7 +106,7 @@ function modelsCell(s) {
   if (C.isCloudSite(s.type)) return '<span class="tiny muted">–</span>';
   const a = autoOf(s);
   const f = (lbl, kind, key, auto) => `<label class="mf"><span>${lbl}</span><select data-k="${key}" title="Auto = chosen by this site's bandwidth tier. Pick a model to override.">${modelOpts(kind, s[key] || '', 'Auto · ' + auto)}</select></label>`;
-  return `<div class="mgrid">${f('MX', 'mx', 'mxOverride', a.mx)}${s.switching ? f('Switch', 'sw', 'swModel', a.swModel) : ''}${s.wifi ? f('AP', 'ap', 'apModel', a.apModel) : ''}${s.camera ? f('Camera', 'cam', 'camModel', a.camModel) : ''}${s.iot ? f('Sensor', 'sensor', 'sensorModel', a.sensorModel) : ''}</div>`;
+  return `<div class="mgrid">${f('MX', 'mx', 'mxOverride', a.mx)}${s.switching ? f('Switch', 'sw', 'swModel', a.swModel) : ''}${s.switching ? `<label class="mf"><span>LAN resilience</span><select data-k="lanRes">${[['', 'Auto · ' + C.RES_LABEL[a.res]], ['none', 'None'], ['stack', 'N+1 stack'], ['pair', 'Redundant pair']].map(([v, l]) => `<option value="${v}"${(s.lanRes || '') === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label><label class="mf"><span>Wired ports</span><input type="number" min="0" data-k="wiredPorts" value="${s.wiredPorts ? esc(s.wiredPorts) : ''}" placeholder="auto · ${a.ports}"></label>` : ''}${s.wifi ? f('AP', 'ap', 'apModel', a.apModel) : ''}${s.camera ? f('Camera', 'cam', 'camModel', a.camModel) : ''}${s.iot ? f('Sensor', 'sensor', 'sensorModel', a.sensorModel) : ''}</div>`;
 }
 const TCLS = { HQ: 'hq', DC: 'dc', Branch: 'br' };
 App.renderSites = function () {
@@ -124,6 +125,13 @@ App.renderSites = function () {
       <label class="chip${s.iot ? ' on' : ''}"><input type="checkbox" data-k="iot"${s.iot ? ' checked' : ''}>IoT${s.iot ? `<input type="number" min="0" data-k="sensors" value="${esc(s.sensors)}">` : ''}</label></div></td>
     <td class="mcell">${modelsCell(s)}</td>
     <td><button class="x" type="button" data-act="del" title="Remove site">✕</button></td></tr>`).join('');
+  App.siteWarn();
+};
+App.siteWarn = function () {
+  const el = $('siteWarn'); if (!el) return;
+  const zero = S.sites.filter((x) => !C.isCloudSite(x.type) && x.type !== 'DC' && C.num(x.users) === 0 && (x.wifi || x.switching)).length, nolan = S.sites.filter((x) => !C.isCloudSite(x.type) && !x.switching && (x.wifi || (x.camera && C.num(x.cameras) > 0))).length;
+  const m = []; if (zero) m.push(`${zero} site(s) have 0 users, so APs and switches are sized at the minimum (1). Enter user counts for a realistic design.`); if (nolan) m.push(`${nolan} site(s) have APs or cameras but LAN switching is off, so no PoE switches will be in the BoM.`);
+  el.hidden = !m.length; el.innerHTML = m.map((t) => '⚠ ' + esc(t)).join('<br>');
 };
 function siteEvent(e) {
   const t = e.target, tr = t.closest('tr'); if (!tr) return; const s = S.sites[+tr.dataset.i]; if (!s) return;
@@ -141,23 +149,24 @@ function siteEvent(e) {
   else if (t.type === 'number') s[k] = C.num(t.value);
   else s[k] = t.value;
   if (k === 'type') t.className = 'typesel ' + (TCLS[t.value] || 'br');
-  const mc = tr.querySelector('.mcell'); if (mc && !t.closest('.mcell')) mc.innerHTML = modelsCell(s);
+  const mc = tr.querySelector('.mcell'); if (mc && (!t.closest('.mcell') || (e.type === 'change' && (k === 'wiredPorts' || k === 'lanRes')))) mc.innerHTML = modelsCell(s);
+  App.siteWarn();
 }
 App.bindSites = function () {
   ['input', 'change', 'click'].forEach((ev) => $('siteTable').tBodies[0].addEventListener(ev, siteEvent));
   $('addSite').addEventListener('click', () => { S.sites.push(newSite()); App.renderSites(); });
-  $('tplBtn').addEventListener('click', () => dl(new Blob(['Type,Country,City,Users,WAN1_Type,WAN1_Mbps,WAN2_Type,WAN2_Mbps,HA,Switching,WiFi,Cameras,Sensors,MX_Model,AP_Model,Switch_Model,Camera_Model,Sensor_Model\r\nHQ,UK,London,400,MPLS,500,DIA,1000,Y,Y,Y,12,6,MX250,MR46,MS250-48FP,MV22,MT14\r\nBranch,UK,Bristol,60,DIA,200,Broadband,80,N,Y,Y,4,2,,,,,\r\n'], { type: 'text/csv' }), 'sites_template.csv'));
+  $('tplBtn').addEventListener('click', () => dl(new Blob(['Type,Country,City,Users,WAN1_Type,WAN1_Mbps,WAN2_Type,WAN2_Mbps,HA,Switching,WiFi,Cameras,Sensors,MX_Model,AP_Model,Switch_Model,Camera_Model,Sensor_Model,LAN_Resilience,Wired_Ports\r\nHQ,UK,London,400,MPLS,500,DIA,1000,Y,Y,Y,12,6,MX250,MR46,MS250-48FP,MV22,MT14,pair,\r\nBranch,UK,Bristol,60,DIA,200,Broadband,80,N,Y,Y,4,2,,,,,,,\r\n'], { type: 'text/csv' }), 'sites_template.csv'));
   $('siteCsv').addEventListener('change', async (e) => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     try {
       const rows = C.parseCsvRows(C.decodeBuffer(await f.arrayBuffer())); const h = rows[0].map((x) => x.toLowerCase().replace(/[^a-z0-9]/g, ''));
       const col = (...n) => h.findIndex((x) => n.includes(x));
-      const ix = { type: col('type', 'sitetype'), country: col('country'), city: col('city', 'site', 'name'), users: col('users', 'headcount'), ha: col('ha'), sw: col('switching', 'lan'), wifi: col('wifi'), cam: col('cameras', 'camera'), sen: col('sensors', 'iot'), mx: col('mxmodel', 'mx'), ap: col('apmodel', 'ap'), swm: col('switchmodel', 'swmodel'), cm: col('cameramodel', 'cammodel'), sm: col('sensormodel') };
+      const ix = { type: col('type', 'sitetype'), country: col('country'), city: col('city', 'site', 'name'), users: col('users', 'headcount'), ha: col('ha'), sw: col('switching', 'lan'), wifi: col('wifi'), cam: col('cameras', 'camera'), sen: col('sensors', 'iot'), mx: col('mxmodel', 'mx'), ap: col('apmodel', 'ap'), swm: col('switchmodel', 'swmodel'), cm: col('cameramodel', 'cammodel'), sm: col('sensormodel'), lr: col('lanresilience', 'resilience'), wp: col('wiredports') };
       const out = [];
       for (const r of rows.slice(1)) {
         const g = (i) => (i >= 0 ? (r[i] || '').trim() : ''); const wan = [];
         for (let n = 1; n <= 4; n++) { const a = col(`wan${n}type`), b = col(`wan${n}mbps`, `wan${n}bw`, `wan${n}bandwidth`); if (b >= 0 && C.num(r[b]) > 0) wan.push({ type: g(a), mbps: C.num(r[b]) }); }
-        out.push(App.normSite({ type: g(ix.type), country: g(ix.country), city: g(ix.city), users: g(ix.users), ha: g(ix.ha), switching: ix.sw >= 0 ? g(ix.sw) : null, wifi: ix.wifi >= 0 ? g(ix.wifi) : null, cameras: g(ix.cam), sensors: g(ix.sen), mxModel: g(ix.mx), apModel: g(ix.ap), swModel: g(ix.swm), camModel: g(ix.cm), sensorModel: g(ix.sm), wan }));
+        out.push(App.normSite({ type: g(ix.type), country: g(ix.country), city: g(ix.city), users: g(ix.users), ha: g(ix.ha), switching: ix.sw >= 0 ? g(ix.sw) : null, wifi: ix.wifi >= 0 ? g(ix.wifi) : null, cameras: g(ix.cam), sensors: g(ix.sen), mxModel: g(ix.mx), apModel: g(ix.ap), swModel: g(ix.swm), camModel: g(ix.cm), sensorModel: g(ix.sm), lanRes: g(ix.lr).replace(/[^a-z]/gi, '').toLowerCase().replace(/^n1.*|^nplus.*|^stack.*/, 'stack').replace(/^redundant.*|^pair.*|^ha.*|^dual.*/, 'pair'), wiredPorts: g(ix.wp), wan }));
       }
       if (!out.length) throw new Error('No site rows found');
       S.sites = out; App.renderSites(); $('importNote').hidden = false; $('importNote').className = 'small ok'; $('importNote').textContent = `Imported ${out.length} site(s).`;
@@ -175,10 +184,14 @@ App.activeAddons = () => [...document.querySelectorAll('#addonGrid input:checked
 /* ---------- Sizing rules UI ---------- */
 App.renderRules = function (reset) {
   const cfg = C.CONFIG;
-  if (reset) { cfg.rules = JSON.parse(JSON.stringify(C.DEFAULT_RULES)); Object.assign(cfg.defaults, JSON.parse(JSON.stringify(C.DEFAULT_DEFAULTS))); cfg.usersPerAp = 30; cfg.portsPerSwitch = 24; cfg.wiredShare = 0.5; cfg.haLicDouble = true; }
+  if (reset) { cfg.rules = JSON.parse(JSON.stringify(C.DEFAULT_RULES)); cfg.swLadder = JSON.parse(JSON.stringify(C.DEFAULT_LADDER)); cfg.core = JSON.parse(JSON.stringify(C.DEFAULT_CORE)); cfg.stackAbovePorts = 48; Object.assign(cfg.defaults, JSON.parse(JSON.stringify(C.DEFAULT_DEFAULTS))); cfg.usersPerAp = 30; cfg.portsPerSwitch = 24; cfg.wiredShare = 0.5; cfg.haLicDouble = true; }
   const rsel = (kind, key, r, blank) => `<select data-k="${key}"><option value="">${blank}</option>${C.MODELS[kind].map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === r[key] ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('')}</select>`;
   $('rulesBody').innerHTML = cfg.rules.map((r, i) => `<tr data-i="${i}"><td><select data-k="scope"><option value="branch"${r.scope === 'branch' ? ' selected' : ''}>Branch</option><option value="hub"${r.scope === 'hub' ? ' selected' : ''}>Hub (DC / HQ)</option><option value="any"${r.scope === 'any' ? ' selected' : ''}>Any</option></select></td>
-    <td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:100px"></td><td>${rsel('mx', 'model', r, '— none —')}</td><td>${rsel('sw', 'sw', r, '— default —')}</td><td>${rsel('ap', 'ap', r, '— default —')}</td><td>${rsel('cam', 'cam', r, '— default —')}</td><td>${rsel('sensor', 'sensor', r, '— default —')}</td><td><button class="x" type="button" data-act="rdel">✕</button></td></tr>`).join('');
+    <td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:100px"></td><td>${rsel('mx', 'model', r, '— none —')}</td><td>${rsel('sw', 'sw', r, '— by port ladder —')}</td><td>${rsel('ap', 'ap', r, '— default —')}</td><td>${rsel('cam', 'cam', r, '— default —')}</td><td>${rsel('sensor', 'sensor', r, '— default —')}</td><td><button class="x" type="button" data-act="rdel">✕</button></td></tr>`).join('');
+  const lsel = (r, i) => `<select data-k="model">${C.MODELS.sw.map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === r.model ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('')}</select>`;
+  $('ladderBody').innerHTML = cfg.swLadder.map((r, i) => `<tr data-i="${i}"><td><select data-k="scope"><option value="branch"${r.scope === 'branch' ? ' selected' : ''}>Branch</option><option value="hub"${r.scope === 'hub' ? ' selected' : ''}>Hub (DC / HQ)</option></select></td><td><select data-k="kind"><option value="standalone"${r.kind === 'standalone' ? ' selected' : ''}>Standalone</option><option value="resilient"${r.kind === 'resilient' ? ' selected' : ''}>Resilient (stack / pair)</option></select></td><td><input type="number" data-k="upTo" value="${r.upTo >= 1e9 ? '' : esc(r.upTo)}" placeholder="no limit" style="width:100px"></td><td>${lsel(r, i)}</td><td><button class="x" type="button" data-act="ldel">✕</button></td></tr>`).join('');
+  const coreOpts = (cur) => C.MODELS.sw.map((g) => `<optgroup label="${esc(g.group)}">${g.ids.map((m) => `<option${m === cur ? ' selected' : ''}>${esc(m)}</option>`).join('')}</optgroup>`).join('');
+  $('cfgCoreHQ').innerHTML = coreOpts(cfg.core.HQ); $('cfgCoreDC').innerHTML = coreOpts(cfg.core.DC); $('cfgStackAbove').value = cfg.stackAbovePorts;
   if (App.renderSites) App.renderSites();
   $('cfgUsersPerAp').value = cfg.usersPerAp; $('cfgPortsPerSwitch').value = cfg.portsPerSwitch; $('cfgWired').value = cfg.wiredShare; $('cfgHaLic').value = cfg.haLicDouble ? '1' : '0';
   const d = cfg.defaults; $('dfAp').value = d.ap; $('dfSw').value = d.sw; $('dfCam').value = d.cam; $('dfSensor').value = d.sensor; $('dfMxEd').value = d.mxEd; $('dfApEd').value = d.apEd; $('dfSwEd').value = d.swEd;
@@ -188,6 +201,13 @@ App.bindRules = function () {
   const rb = $('rulesBody');
   rb.addEventListener('input', (e) => { const tr = e.target.closest('tr'), r = cfg.rules[+tr.dataset.i], k = e.target.dataset.k; if (!r || !k) return; r[k] = k === 'upTo' ? (e.target.value === '' ? 1e9 : C.num(e.target.value)) : e.target.value; App.renderSites(); });
   rb.addEventListener('click', (e) => { if (e.target.dataset.act === 'rdel') { cfg.rules.splice(+e.target.closest('tr').dataset.i, 1); App.renderRules(); } });
+  const lb = $('ladderBody');
+  const lh = (e) => { const tr = e.target.closest('tr'); if (!tr) return; const r = cfg.swLadder[+tr.dataset.i], k = e.target.dataset.k; if (!r || !k) return; r[k] = k === 'upTo' ? (e.target.value === '' ? 1e9 : C.num(e.target.value)) : e.target.value; App.renderSites(); };
+  lb.addEventListener('input', lh); lb.addEventListener('change', lh);
+  lb.addEventListener('click', (e) => { if (e.target.dataset.act === 'ldel') { cfg.swLadder.splice(+e.target.closest('tr').dataset.i, 1); App.renderRules(); } });
+  $('ladderAdd').addEventListener('click', () => { cfg.swLadder.push({ scope: 'branch', kind: 'standalone', upTo: 1e9, model: 'MS130-48P' }); App.renderRules(); });
+  $('cfgCoreHQ').addEventListener('change', () => { cfg.core.HQ = $('cfgCoreHQ').value; App.renderSites(); }); $('cfgCoreDC').addEventListener('change', () => { cfg.core.DC = $('cfgCoreDC').value; App.renderSites(); });
+  $('cfgStackAbove').addEventListener('input', () => { cfg.stackAbovePorts = Math.max(1, C.num($('cfgStackAbove').value, 48)); App.renderSites(); });
   $('ruleAdd').addEventListener('click', () => { cfg.rules.push({ scope: 'branch', upTo: 1e9, model: '', sw: '', ap: '', cam: '', sensor: '' }); App.renderRules(); });
   $('rulesReset').addEventListener('click', () => App.renderRules(true));
   const bind = (id, fn) => $(id).addEventListener('input', () => fn($(id).value));
@@ -198,9 +218,9 @@ App.bindRules = function () {
   $('previewBtn').addEventListener('click', preview);
 };
 function preview() {
-  const tb = $('previewBody'); if (!S.sites.length) { tb.innerHTML = '<tr><td colspan="10" class="center muted" style="padding:12px">No sites yet.</td></tr>'; return; }
+  const tb = $('previewBody'); if (!S.sites.length) { tb.innerHTML = '<tr><td colspan="11" class="center muted" style="padding:12px">No sites yet.</td></tr>'; return; }
   const chk = (m) => !S.pb ? '' : C.findHardware(S.pb, m) ? ' <span class="ok" title="Found in price book">✔</span>' : ' <span class="err" title="Not in price book">✖</span>';
-  tb.innerHTML = S.sites.map((s, i) => { const z = C.sizeSite(s); return `<tr><td>${i + 1}</td><td>${esc(C.siteName(s))}</td><td>${esc(s.type)}</td><td>${z.bw} Mbps</td><td><b>${esc(z.mx || '—')}</b>${z.mx ? chk(z.mx) : ''}</td><td>${z.aps ? `${z.aps} × ${esc(z.apModel)}${chk(z.apModel)}` : '–'}</td><td>${z.switches ? `${z.switches} × ${esc(z.swModel)}${chk(z.swModel)}` : '–'}</td><td>${z.cameras ? `${z.cameras} × ${esc(z.camModel)}${chk(z.camModel)}` : '–'}</td><td>${z.sensors ? `${z.sensors} × ${esc(z.sensorModel)}${chk(z.sensorModel)}` : '–'}</td><td>${s.ha ? 'Y' : '–'}</td></tr>`; }).join('');
+  tb.innerHTML = S.sites.map((s, i) => { const z = C.sizeSite(s); return `<tr><td>${i + 1}</td><td>${esc(C.siteName(s))}</td><td>${esc(s.type)}</td><td>${z.bw} Mbps</td><td><b>${s.ha && z.mx ? '2 × ' : z.mx ? '1 × ' : ''}${esc(z.mx || '—')}</b>${z.mx ? chk(z.mx) : ''}${s.ha && z.mx ? ' <span class="tiny muted">HA pair</span>' : ''}</td><td>${z.aps ? `${z.aps} × ${esc(z.apModel)}${chk(z.apModel)}` : '–'}</td><td>${z.switches ? `${z.switches} × ${esc(z.swModel)}${chk(z.swModel)}<span class="tiny muted">${esc(C.lanTag(z))}</span>${z.coreQty ? `<br>${z.coreQty} × ${esc(z.coreModel)}${chk(z.coreModel)} <span class="tiny muted">aggregation</span>` : ''}` : '–'}</td><td>${z.cameras ? `${z.cameras} × ${esc(z.camModel)}${chk(z.camModel)}` : '–'}</td><td>${z.sensors ? `${z.sensors} × ${esc(z.sensorModel)}${chk(z.sensorModel)}` : '–'}</td><td>${s.ha ? 'Y' : '–'}</td><td class="tiny warn">${C.siteNotes(s).map(esc).join('<br>')}</td></tr>`; }).join('');
 }
 App.preview = preview;
 
@@ -301,7 +321,7 @@ App.generateDesign = async function () {
     S.cur = $('cur').value; S.fx = C.num($('fx').value, 1) || 1;
     const company = $('companyName').value.trim() || 'Customer';
     const infra = meraki ? C.buildInfraLines(S.pb, S.sites) : [];
-    const sizing = meraki ? S.sites.map((s) => { const z = C.sizeSite(s); return { site: C.siteName(s), type: s.type, users: s.users, wan: s.wan.map((l) => `${l.type} ${l.mbps}Mbps`), ha: !!s.ha, mx: z.mx, aps: z.aps, apModel: z.apModel, switches: z.switches, swModel: z.swModel, cameras: z.cameras, camModel: z.camModel, sensors: z.sensors, sensorModel: z.sensorModel }; }) : [];
+    const sizing = meraki ? S.sites.map((s) => { const z = C.sizeSite(s); return { site: C.siteName(s), type: s.type, users: s.users, wan: s.wan.map((l) => `${l.type} ${l.mbps}Mbps`), ha: !!s.ha, mx: z.mx, aps: z.aps, apModel: z.apModel, switches: z.switches, swModel: z.swModel, lanResilience: C.RES_LABEL[z.res], lanTag: C.lanTag(z), coreModel: z.coreModel, coreQty: z.coreQty, cameras: z.cameras, camModel: z.camModel, sensors: z.sensors, sensorModel: z.sensorModel }; }) : [];
     let svc = { picks: [], note: '' }, narr = null, narrErr = '';
     const jobs = [];
     if (sse && users > 0) jobs.push(pickSse(users).then((r) => { svc = r; }).catch((e) => { svc = { picks: [], note: 'Secure Access SKU selection failed: ' + e.message }; }));

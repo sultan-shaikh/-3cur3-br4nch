@@ -134,6 +134,7 @@
       <button id="tplBtn" class="linkbtn" type="button">Download CSV template</button>
     </div>
     <p id="importNote" class="small warn" hidden></p>
+    <p id="siteWarn" class="small warn" hidden></p>
   </div>
 
   <div class="sep">
@@ -163,11 +164,18 @@
     <p class="small muted" style="margin:0 0 10px">Total site WAN bandwidth picks a tier, and each tier sets the MX, switch, AP, camera and sensor model. Edit thresholds or models; changes apply immediately to the sites table, sizing and the BoM. A model chosen on a site overrides the tier. Models must exist in your price book or the line is flagged.</p>
     <div class="tablewrap"><table class="mini" id="rulesTable"><thead><tr><th>Site scope</th><th>Up to (Mbps)</th><th>MX</th><th>Switch</th><th>AP</th><th>Camera</th><th>Sensor</th><th></th></tr></thead><tbody id="rulesBody"></tbody></table></div>
     <button id="ruleAdd" class="linkbtn" type="button" style="margin-top:6px">+ Add custom rule</button>
+    <h3 style="font-size:14px;margin:18px 0 4px">Access switch ladder <span class="small muted" style="font-weight:400">(model chosen from the wired ports a site needs; used when the tier above leaves Switch blank)</span></h3>
+    <p class="small muted" style="margin:0 0 8px">Standalone = single or multiple unstacked switches. Resilient = stack-capable models, used for N+1 stacks and redundant pairs (MS120/125/130 cannot physically stack).</p>
+    <div class="tablewrap"><table class="mini"><thead><tr><th>Site scope</th><th>Type</th><th>Ports up to</th><th>Switch model</th><th></th></tr></thead><tbody id="ladderBody"></tbody></table></div>
+    <button id="ladderAdd" class="linkbtn" type="button" style="margin-top:6px">+ Add ladder row</button>
     <div class="grid g4" style="margin-top:16px">
       <label class="f">Users per access point<input id="cfgUsersPerAp" type="number" min="1"></label>
       <label class="f">Ports per switch (only if model is unknown)<input id="cfgPortsPerSwitch" type="number" min="1"></label>
       <label class="f">Share of users on wired ports (0–1)<input id="cfgWired" type="number" min="0" max="1" step="0.05"></label>
       <label class="f">HA: licence both MX units<select id="cfgHaLic"><option value="1">Yes</option><option value="0">No (hardware only)</option></select></label>
+      <label class="f">Auto N+1 stack above (access ports, branches)<input id="cfgStackAbove" type="number" min="1"></label>
+      <label class="f">Aggregation pair at HQ<select id="cfgCoreHQ"></select></label>
+      <label class="f">Aggregation pair at DC<select id="cfgCoreDC"></select></label>
       <label class="f">Fallback access point model<select id="dfAp"></select></label>
       <label class="f">Fallback switch model<select id="dfSw"></select></label>
       <label class="f">Fallback camera model<select id="dfCam"></select></label>
@@ -178,8 +186,8 @@
     </div>
     <div style="margin-top:18px;padding-top:14px;border-top:1px dashed var(--s300)">
       <div class="row between wrap" style="margin-bottom:8px"><h3 style="font-size:14px">Preview: equipment assigned to your actual sites</h3><button id="previewBtn" class="btn blue sm" type="button">▶ Preview assignment</button></div>
-      <div class="tablewrap"><table class="mini"><thead><tr><th>#</th><th>Site</th><th>Type</th><th>Total BW</th><th>MX</th><th>APs</th><th>Switches</th><th>Cameras</th><th>Sensors</th><th>HA</th></tr></thead>
-        <tbody id="previewBody"><tr><td colspan="10" class="center muted" style="padding:12px;font-style:italic">Click “Preview assignment” to check sizing against your current sites.</td></tr></tbody></table></div>
+      <div class="tablewrap"><table class="mini"><thead><tr><th>#</th><th>Site</th><th>Type</th><th>Total BW</th><th>MX</th><th>APs</th><th>Switches</th><th>Cameras</th><th>Sensors</th><th>HA</th><th>Notes</th></tr></thead>
+        <tbody id="previewBody"><tr><td colspan="11" class="center muted" style="padding:12px;font-style:italic">Click “Preview assignment” to check sizing against your current sites.</td></tr></tbody></table></div>
     </div>
   </div>
 

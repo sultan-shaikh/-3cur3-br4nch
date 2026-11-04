@@ -36,11 +36,11 @@ App.buildMermaid = function (sites, o) {
     if (s.ha) { L.push(`    ${b}["${lbl(z.mx) || 'MX'}<br/>(standby)"]`); useCls(C.isHub(s.type) ? 'hub' : 'br', b); }
     const compact = real.length > 4; let feed = a;
     if (compact) {
-      const parts = [z.switches ? `${z.switches} x MS switch` : '', z.aps ? `${z.aps} x MR AP` : '', z.cameras ? `${z.cameras} x MV camera` : '', z.sensors ? `${z.sensors} x MT sensor` : ''].filter(Boolean);
+      const parts = [z.switches ? `${z.switches} x MS switch${C.lanTag(z)}` : '', z.coreQty ? `${z.coreQty} x aggregation (${z.coreModel})` : '', z.aps ? `${z.aps} x MR AP` : '', z.cameras ? `${z.cameras} x MV camera` : '', z.sensors ? `${z.sensors} x MT sensor` : ''].filter(Boolean);
       if (parts.length) { L.push(`    D${i}["${parts.join('<br/>')}"]`); useCls(z.switches ? 'lan' : z.aps ? 'wifi' : z.cameras ? 'cam' : 'iot', `D${i}`); feed = null; }
     } else {
       feed = z.switches ? `W${i}` : a;
-      if (z.switches) { L.push(`    W${i}["${z.switches} x MS switch"]`); useCls('lan', `W${i}`); }
+      if (z.switches) { L.push(`    W${i}["${z.switches} x MS switch${C.lanTag(z)}${z.coreQty ? "<br/>+ " + z.coreQty + " x aggregation" : ""}"]`); useCls('lan', `W${i}`); }
       if (z.aps) { L.push(`    A${i}["${z.aps} x MR AP"]`); useCls('wifi', `A${i}`); }
       if (z.cameras) { L.push(`    V${i}["${z.cameras} x MV camera"]`); useCls('cam', `V${i}`); }
       if (z.sensors) { L.push(`    T${i}["${z.sensors} x MT sensor"]`); useCls('iot', `T${i}`); }
