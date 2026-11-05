@@ -26,7 +26,7 @@ async function unlock(code) {
 }
 
 function start() {
-  App.renderAddons(); App.renderRules(); App.bindRules(); App.bindSites(); App.bindScan(); App.bindProposal();
+  App.renderAddons(); App.renderRules(); App.bindRules(); App.bindSites(); App.bindSiteTools(); App.bindScan(); App.bindProposal();
   S.sites = [Object.assign(App.newSite(), { type: 'HQ', city: 'London', users: 120, wan: [{ type: 'DIA', mbps: 500 }], ha: true }), Object.assign(App.newSite(), { city: 'Bristol', users: 40 })];
   App.renderSites();
   $('priceCsv').addEventListener('change', (e) => { if (e.target.files[0]) App.onPriceBook(e.target.files[0]); });

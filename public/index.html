@@ -13,6 +13,7 @@
 <script src="assets/vendor/pptxgen.bundle.js" defer></script>
 <script src="assets/js/core.js" defer></script>
 <script src="assets/js/app.js" defer></script>
+<script src="assets/js/sites.js" defer></script>
 <script src="assets/js/diagram.js" defer></script>
 <script src="assets/js/report.js" defer></script>
 <script src="assets/js/proposal.js" defer></script>
@@ -62,11 +63,12 @@
     </div>
   </div>
 </nav>
+<div class="subnav noprint" id="subnav"><div class="in"><a href="#secSetup">1 · Setup</a><a href="#secReq">2 · Requirements</a><a href="#meInputs">3 · Sites</a><a href="#secSvc">4 · Managed services</a><a href="#secRules">Sizing rules</a><a href="#secPrice">5 · Price book &amp; generate</a><a href="#proposalPanel">Proposal</a></div></div>
 
 <main>
 <div id="inputSection" class="panel noprint">
 
-  <div class="modelbox">
+  <div class="modelbox" id="secSetup">
     <label class="f" for="modelSelector" style="color:#00506b">1. AI model</label>
     <div class="row">
       <select id="modelSelector" disabled><option>Loading models…</option></select>
@@ -95,7 +97,7 @@
     </div>
   </div>
 
-  <div class="step">
+  <div class="step" id="secReq">
     <h2>2. Architecture requirements</h2>
     <div class="row"><label class="tiny bold muted" for="designScope" style="text-transform:uppercase">Design scope</label>
       <select id="designScope" style="width:auto;font-weight:700;color:#00506b;background:var(--blue-l);border:2px solid var(--blue)">
@@ -124,9 +126,11 @@
   </div>
 
   <div id="meInputs" class="sep">
-    <div class="row wrap" style="margin-bottom:12px"><span class="pillar slate">Pillar 2: Meraki sites</span><span class="small muted">WAN bandwidth sizes the MX · services tick the LAN / WiFi / camera / IoT hardware</span></div>
-    <div class="tablewrap"><table class="site-table" id="siteTable">
-      <thead><tr><th>Type</th><th>Country</th><th>City</th><th>Users</th><th style="min-width:230px">WAN links (type + Mbps)</th><th class="center">HA</th><th style="min-width:200px">Services</th><th style="min-width:290px">Models <span style="text-transform:none;font-weight:400">(Auto = by bandwidth tier)</span></th><th></th></tr></thead>
+    <div class="row wrap" style="margin-bottom:12px"><span class="pillar slate">Pillar 2: Meraki sites</span><span class="small muted">One line per site. Click <b>Edit</b> on a row for WAN links, equipment and LAN design.</span></div>
+    <div id="siteSummary" class="sitesum"></div>
+    <div id="bulkBar" class="bulkbar" hidden><b id="bulkCount">0 selected</b><span>Set</span><select id="bulkField"></select><span>to</span><select id="bulkValue"></select><button id="bulkApply" class="btn blue sm" type="button">Apply</button><button id="bulkDel" class="btn sm" type="button">Delete selected</button><button id="bulkClear" class="linkbtn" type="button">Clear</button><span id="bulkNote" class="tiny ok"></span></div>
+    <div class="tablewrap sitesw"><table class="site-table" id="siteTable">
+      <thead><tr><th class="selc"><input type="checkbox" id="selAll" aria-label="Select all visible"> Edit</th><th>Type</th><th>Country</th><th>City</th><th>Users</th><th>WAN</th><th class="center">HA</th><th>Services</th><th>Design (auto-sized)</th><th class="center">Check</th><th></th></tr></thead>
       <tbody></tbody></table></div>
     <div class="row wrap" style="margin-top:12px">
       <button id="addSite" class="btn blue" type="button">＋ Add new site</button>
@@ -137,8 +141,8 @@
     <p id="siteWarn" class="small warn" hidden></p>
   </div>
 
-  <div class="sep">
-    <div class="step" style="border:0;margin-bottom:8px;padding:0"><h2>3. Managed service wrap</h2></div>
+  <div class="sep" id="secSvc">
+    <div class="step" style="border:0;margin-bottom:8px;padding:0"><h2>4. Managed service wrap</h2></div>
     <div class="grid g2" style="gap:24px">
       <div class="box violet"><h4 style="color:#4c1d95">A) Service tiers (mutually exclusive)</h4>
         <label class="svc"><input type="radio" name="tier" value="0" checked><span><b>None / Product only</b></span></label>
@@ -156,9 +160,10 @@
     <div class="grid g3" style="margin-top:14px"><label class="f">Managed connectivity / circuits, annual (optional)<input id="wanAnnual" type="number" min="0" value="0"></label></div>
   </div>
 
-  <div class="sep">
-    <div class="row between wrap" style="margin-bottom:6px">
-      <h2 style="font-size:17px">3b. Sizing rules <span class="small muted" style="font-weight:400">(vendor default logic — override before generating)</span></h2>
+  <details class="adv sep" id="secRules">
+    <summary><span class="advt">Sizing rules &amp; defaults</span><span class="small muted">Advanced · tiers by bandwidth, switch ladder, hub aggregation. The defaults work; edit only if BT standards differ.</span></summary>
+    <div class="row between wrap" style="margin:10px 0 6px">
+      <span></span>
       <button id="rulesReset" class="btn sm" type="button">↺ Reset to defaults</button>
     </div>
     <p class="small muted" style="margin:0 0 10px">Total site WAN bandwidth picks a tier, and each tier sets the MX, switch, AP, camera and sensor model. Edit thresholds or models; changes apply immediately to the sites table, sizing and the BoM. A model chosen on a site overrides the tier. Models must exist in your price book or the line is flagged.</p>
@@ -174,6 +179,8 @@
       <label class="f">Share of users on wired ports (0–1)<input id="cfgWired" type="number" min="0" max="1" step="0.05"></label>
       <label class="f">HA: licence both MX units<select id="cfgHaLic"><option value="1">Yes</option><option value="0">No (hardware only)</option></select></label>
       <label class="f">Auto N+1 stack above (access ports, branches)<input id="cfgStackAbove" type="number" min="1"></label>
+      <label class="f">Hub concentration factor (0–1, share of branch bandwidth a hub carries)<input id="cfgConc" type="number" min="0" max="1" step="0.05"></label>
+      <label class="f">Flag a hub above (Mbps aggregate)<input id="cfgHubMax" type="number" min="1"></label>
       <label class="f">Aggregation pair at HQ<select id="cfgCoreHQ"></select></label>
       <label class="f">Aggregation pair at DC<select id="cfgCoreDC"></select></label>
       <label class="f">Fallback access point model<select id="dfAp"></select></label>
@@ -189,9 +196,9 @@
       <div class="tablewrap"><table class="mini"><thead><tr><th>#</th><th>Site</th><th>Type</th><th>Total BW</th><th>MX</th><th>APs</th><th>Switches</th><th>Cameras</th><th>Sensors</th><th>HA</th><th>Notes</th></tr></thead>
         <tbody id="previewBody"><tr><td colspan="11" class="center muted" style="padding:12px;font-style:italic">Click “Preview assignment” to check sizing against your current sites.</td></tr></tbody></table></div>
     </div>
-  </div>
+  </details>
 
-  <div class="grid g2 sep" style="align-items:end;margin-top:30px">
+  <div class="grid g2 sep" id="secPrice" style="align-items:end;margin-top:30px">
     <div>
       <label class="f" for="priceCsv">Price book (required — BoM is generated <u>only</u> from this SKU list)</label>
       <input type="file" id="priceCsv" accept=".csv,text/csv" style="margin-top:4px">
@@ -199,7 +206,7 @@
       <p id="priceStatus" class="small bold warn" style="margin:4px 0 0">⚠ No price book uploaded yet — BoM generation is blocked until one is provided.</p>
       <label class="row small" style="margin-top:6px"><input type="checkbox" id="derive"> Estimate missing 3Y / 5Y prices (30% / 50% off 1Y) — marked *</label>
     </div>
-    <div><button id="generateBtn" class="btn dark big" type="button" disabled>4. Generate design &amp; BoM</button>
+    <div><button id="generateBtn" class="btn dark big" type="button" disabled>Generate design &amp; BoM</button>
       <p id="status" class="small muted center" style="margin:8px 0 0"></p><p id="error" class="err small" hidden style="margin:8px 0 0"></p></div>
   </div>
 
