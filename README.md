@@ -1,19 +1,22 @@
-# Cisco Secure Branch Architect (v2)
+# Sentinel Architect
+Estimator for Microsoft Sentinel (SIEM) + SOAR consumption cost and managed-service design.
 
-All-inclusive Meraki (LAN, WAN/SD-WAN, security, WiFi, camera, IoT) + Cisco Secure Access / Secure Connect design, BoM, TCO and proposal tool.
-AI scans diagrams, writes the design narrative and proposes Secure Access SKUs. **Every price comes from your CSV price book.** Unmatched lines are excluded and flagged, never priced by the AI.
+## Deploy
+1. Push this folder to GitHub, connect the repo to Netlify (publish `public`, functions `netlify/functions` - set in netlify.toml).
+2. Environment variables: `GEMINI_API_KEY`, `ACCESS_CODE`.
+3. Open the site, enter the access code.
 
-## Deploy (GitHub web upload → Netlify)
-1. Unzip first. Create a new GitHub repo and upload the **contents of the unzipped folder**, keeping the folders: `public/`, `netlify/`, `tests/`, plus `netlify.toml`, `package.json`, `README.md`.
-2. Netlify: Add new site → Import from GitHub → pick the repo. Leave build command empty.
-3. Site configuration → Environment variables: `GEMINI_API_KEY` (your key) and `ACCESS_CODE` (passphrase users type to unlock the tool). Optional: `UPSTREAM_TIMEOUT_MS` (default 25000).
-4. Deploys → Trigger deploy → Clear cache and deploy site.
-
-## Price book
-CSV: `SKU, Description, HardwarePrice, Price_1Y, Price_3Y, Price_5Y`. Licence SKUs with -1Y/-1YR/-3YR/-5YR suffixes are merged. Term prices are total contract prices. 3Y/5Y are estimated (30%/50% off) only if the box is ticked and are marked `*`.
-
-## Tuning
-Sizing rules, MX thresholds and default models are editable in the UI (step 3b). Licence-matching patterns live in `public/assets/js/core.js` (`CATALOGUE`). If lines appear in the "no matching SKU" box, adjust the model names/patterns.
+## Before quoting
+- Rates are PLACEHOLDERS (GBP). Import your Microsoft/CSP rate card in Internal view > step 4 (CSV round-trips).
+- Per-source log volumes are industry estimates blended with Microsoft's published allowances (E5 5MB/user/day, Defender for Servers P2 500MB/server/day, free sources). Calibrate with a Log Analytics Usage CSV in step 3.
+- Customer view hides rate card, margins and internal assumptions; the PPTX is always customer-safe.
 
 ## Tests
-`node tests/core.test.js`, `node tests/proxy.test.js`, `node tests/e2e.js` (Playwright).
+`node tests/core.test.js`; `NODE_PATH=$(npm root -g) node tests/e2e.js` (Playwright, mock Gemini).
+
+## v2: managed-service quoting
+- Starting point: greenfield, or migrating from Splunk/QRadar/XSIAM/etc. (GB/day or EPS). Take as-is, or override sources in step 3 and the rest rebalances to the same total.
+- Commercials: 1/3/5-year term; PAYG or commitment tier; true-up or budget cap (overage billed or absorbed); service priced as package, per GB, per source, or package + usage.
+- Price book: one CSV (Item,Description,Unit,Price_GBP) covering Microsoft rates, packages, onboarding, term discounts. Download the template in step 4 (Internal view), fill it in, import it. Rows tagged PLACEHOLDER are not real prices.
+- Output: branded budgetary quote (Budgetary quote button -> Save as PDF) and customer deck. The quote shows a DRAFT banner until a price book is imported.
+- Quote branding (name, logo, colour, contact) is saved in the browser, set in step 4.
